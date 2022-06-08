@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 AFL Management Daemon -- Tool to manage AFL queue and results
 
@@ -28,13 +27,13 @@ import traceback
 import zipfile
 from pathlib import Path
 
-from fasteners import InterProcessLock
-from S3Manager import S3Manager
-
 from Collector.Collector import Collector
+from fasteners import InterProcessLock
 from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Running.AutoRunner import AutoRunner
 from FTB.Signatures.CrashInfo import CrashInfo
+
+from .S3Manager import S3Manager
 
 haveFFPuppet = True
 try:
@@ -1974,7 +1973,7 @@ def main(argv=None):
             if not os.path.exists(os.path.join(opts.afloutdir, "crashes")):
                 # The specified directory doesn't have a "crashes" sub directory.
                 # Either the wrong directory was specified, or this is an AFL
-                # multi-process sychronization directory. Try to figure this out here.
+                # multi-process synchronization directory. Try to figure this out here.
                 sync_dirs = os.listdir(opts.afloutdir)
 
                 for sync_dir in sync_dirs:
@@ -2034,7 +2033,3 @@ def main(argv=None):
                     )
 
                 time.sleep(10)
-
-
-if __name__ == "__main__":
-    sys.exit(main())
