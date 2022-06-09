@@ -30,7 +30,7 @@ def apply_transform(script_path, testcase_path):
 
     with tempfile.TemporaryDirectory() as output_path:
         try:
-            subprocess.check_call([script_path, testcase_path, output_path])
+            subprocess.run([script_path, testcase_path, output_path], check=True)
         except subprocess.CalledProcessError as exc:
             raise Exception(
                 "Failed to apply post crash transformation.  Aborting..."
@@ -76,19 +76,14 @@ def setup_firefox(bin_path, prefs_path, ext_paths, test_path):
 
 
 def test_binary_asan(bin_path):
-    # pylint: disable=consider-using-with
-    process = subprocess.Popen(
+    result = subprocess.run(
         ["nm", "-g", bin_path],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
 
-    (stdout, _) = process.communicate()
-
     if (
-        stdout.find(b" __asan_init") >= 0
-        or stdout.find(b"__ubsan_default_options") >= 0
+        result.stdout.find(b" __asan_init") >= 0
+        or result.stdout.find(b"__ubsan_default_options") >= 0
     ):
         return True
     return False

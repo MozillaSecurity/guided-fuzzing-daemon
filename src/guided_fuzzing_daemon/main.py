@@ -265,16 +265,14 @@ def main(argv=None):
             afl_cmdline.extend(cmdline)
 
             print("Running afl-cmin")
-            with open(os.devnull, "w") as devnull:
-                env = os.environ.copy()
-                env["LD_LIBRARY_PATH"] = os.path.dirname(cmdline[0])
-
-                if opts.firefox:
-                    env.update(ff_env)
-
-                if opts.debug:
-                    devnull = None
-                subprocess.check_call(afl_cmdline, stdout=devnull, env=env)
+            env = os.environ.copy()
+            env["LD_LIBRARY_PATH"] = os.path.dirname(cmdline[0])
+            if opts.firefox:
+                env.update(ff_env)
+            devnull = subprocess.DEVNULL
+            if opts.debug:
+                devnull = None
+            subprocess.run(afl_cmdline, stdout=devnull, env=env, check=True)
 
             if opts.firefox:
                 ffp.clean_up()
@@ -289,12 +287,12 @@ def main(argv=None):
             cmdline = [x for x in cmdline if not x.startswith("-max_len=")]
 
             print("Running libFuzzer merge")
-            with open(os.devnull, "w") as devnull:
-                env = os.environ.copy()
-                env["LD_LIBRARY_PATH"] = os.path.dirname(cmdline[0])
-                if opts.debug:
-                    devnull = None
-                subprocess.check_call(cmdline, stdout=devnull, env=env)
+            env = os.environ.copy()
+            env["LD_LIBRARY_PATH"] = os.path.dirname(cmdline[0])
+            devnull = subprocess.DEVNULL
+            if opts.debug:
+                devnull = None
+            subprocess.run(cmdline, stdout=devnull, env=env, check=True)
 
         if not os.listdir(updated_tests_dir):
             print("Error: Merge returned empty result, refusing to upload.")
@@ -546,7 +544,7 @@ def main(argv=None):
                             # stdout=None,
                             stderr=subprocess.PIPE,
                             env=env,
-                            universal_newlines=True,
+                            text=True,
                         )
 
                         monitors[idx] = LibFuzzerMonitor(
@@ -608,12 +606,12 @@ def main(argv=None):
                     merge_cmdline.extend(["-merge=1", new_corpus_dir, corpus_dir])
 
                     print("Running automated merge...", file=sys.stderr)
-                    with open(os.devnull, "w") as devnull:
-                        env = os.environ.copy()
-                        env["LD_LIBRARY_PATH"] = os.path.dirname(merge_cmdline[0])
-                        if opts.debug:
-                            devnull = None
-                        subprocess.check_call(merge_cmdline, stdout=devnull, env=env)
+                    env = os.environ.copy()
+                    env["LD_LIBRARY_PATH"] = os.path.dirname(merge_cmdline[0])
+                    devnull = subprocess.DEVNULL
+                    if opts.debug:
+                        devnull = None
+                    subprocess.run(merge_cmdline, stdout=devnull, env=env, check=True)
 
                     if not os.listdir(new_corpus_dir):
                         print(
@@ -892,7 +890,7 @@ def main(argv=None):
             afl_cmd.extend(cmd)
 
             try:
-                subprocess.call(afl_cmd, env=env)
+                subprocess.run(afl_cmd, env=env)
             except Exception:  # pylint: disable=broad-except
                 traceback.print_exc()
 

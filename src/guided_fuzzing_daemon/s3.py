@@ -364,7 +364,7 @@ class S3Manager:
         remote_key.name = self.remote_path_build
         remote_key.get_contents_to_filename(zip_dest)
 
-        subprocess.check_call(["unzip", zip_dest, "-d", build_dir])
+        subprocess.run(["unzip", zip_dest, "-d", build_dir], check=True)
 
     def upload_build(self, build_file):
         """
