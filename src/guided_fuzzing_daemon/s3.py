@@ -261,7 +261,7 @@ class S3Manager:
                     remote_keys_for_deletion.append(remote_key.name)
                 continue
 
-            (queue_name, filename) = remote_key.name.rsplit("/", 1)
+            (queue_name, _) = remote_key.name.rsplit("/", 1)
             if queue_name in remote_queues_closed_names:
                 remote_keys_for_deletion.append(remote_key.name)
 
@@ -295,7 +295,7 @@ class S3Manager:
             ):
                 continue
 
-            (queue_name, filename) = remote_key.name.rsplit("/", 1)
+            (queue_name, _) = remote_key.name.rsplit("/", 1)
 
             if queue_name in remote_queues_closed_names:
                 queue_name += "*"
@@ -328,9 +328,9 @@ class S3Manager:
             if remote_key.name.endswith("/"):
                 continue
 
-            dt = boto_parse_ts(remote_key.last_modified)
+            date_obj = boto_parse_ts(remote_key.last_modified)
 
-            date_str = "%s-%02d-%02d" % (dt.year, dt.month, dt.day)
+            date_str = f"{date_obj.year}-{date_obj.month:02d}-{date_obj.day:02d}"
 
             if date_str not in status_data:
                 status_data[date_str] = 0
@@ -406,6 +406,7 @@ class S3Manager:
             remote_key.name = self.remote_path_corpus_bundle
             if remote_key.exists():
                 (zip_fd, zip_dest) = mkstemp(prefix="libfuzzer-s3-corpus")
+                os.close(zip_fd)
                 print("Found corpus bundle, downloading...")
 
                 try:
@@ -459,10 +460,10 @@ class S3Manager:
 
         # Make a zip bundle and upload it
         (zip_fd, zip_dest) = mkstemp(prefix="libfuzzer-s3-corpus")
-        zip_file = ZipFile(zip_dest, "w", ZIP_DEFLATED)
-        for test_file in test_files:
-            zip_file.write(os.path.join(corpus_dir, test_file), arcname=test_file)
-        zip_file.close()
+        os.close(zip_fd)
+        with ZipFile(zip_dest, "w", ZIP_DEFLATED) as zip_file:
+            for test_file in test_files:
+                zip_file.write(os.path.join(corpus_dir, test_file), arcname=test_file)
         remote_key = Key(self.bucket)
         remote_key.name = self.remote_path_corpus_bundle
         print(f"Uploading file {zip_dest} -> {remote_key.name}")
@@ -496,7 +497,8 @@ class S3Manager:
         if corpus_delete:
             self.bucket.delete_keys(delete_list, quiet=True)
 
-    def __get_machine_id(self, base_dir, refresh=False):
+    @staticmethod
+    def __get_machine_id(base_dir, refresh=False):
         """
         Get (and if necessary generate) the machine id which is based on
         the current timestamp and the hostname of the machine. The
@@ -518,16 +520,15 @@ class S3Manager:
         # current timestamp, then we store this ID in a file inside the
         # fuzzing working directory so we can retrieve it later.
         if refresh or not os.path.exists(id_file):
-            h = hashlib.new("sha1")
-            h.update(platform.node().encode("utf-8"))
-            h.update(str(time.time()).encode("utf-8"))
-            id = h.hexdigest()
+            hasher = hashlib.new("sha1")
+            hasher.update(platform.node().encode("utf-8"))
+            hasher.update(str(time.time()).encode("utf-8"))
+            digest = hasher.hexdigest()
             with open(id_file, "w") as id_fd:
-                id_fd.write(id)
-            return id
-        else:
-            with open(id_file) as id_fd:
-                return id_fd.read()
+                id_fd.write(digest)
+            return digest
+        with open(id_file) as id_fd:
+            return id_fd.read()
 
     def __upload_queue_files(self, queue_basedir, queue_files, base_dir, cmdline_file):
         machine_id = self.__get_machine_id(base_dir)

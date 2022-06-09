@@ -52,6 +52,14 @@ repos:
   - repo: meta
     hooks:
       - id: check-useless-excludes
+  - repo: local
+    hooks:
+      - id: pylint
+        name: pylint
+        entry: tox -e pylint --
+        language: system
+        require_serial: true
+        types: [python]
 
 default_language_version:
   python: python3

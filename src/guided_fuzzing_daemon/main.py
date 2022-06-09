@@ -33,13 +33,13 @@ from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Running.AutoRunner import AutoRunner
 from FTB.Signatures.CrashInfo import CrashInfo
 
-from .S3Manager import S3Manager
+from .s3 import S3Manager
 
-haveFFPuppet = True
+HAVE_FFPUPPET = True
 try:
     from ffpuppet import FFPuppet
 except ImportError:
-    haveFFPuppet = False
+    HAVE_FFPUPPET = False
 
 RE_LIBFUZZER_STATUS = re.compile(r"\s*#(\d+)\s+(INITED|NEW|RELOAD|REDUCE|pulse)\s+cov:")
 RE_LIBFUZZER_NEWPC = re.compile(r"\s+NEW_PC:\s+0x")
@@ -52,18 +52,18 @@ NO_CORPUS_MSG = "INFO: A corpus is not provided, starting from an empty corpus"
 
 
 class LibFuzzerMonitor(threading.Thread):
-    def __init__(self, process, killOnOOM=True, mid=None, mqueue=None):
+    def __init__(self, process, kill_on_oom=True, mid=None, mqueue=None):
         threading.Thread.__init__(self)
 
         self.process = process
-        self.fd = process.stderr
+        self.process_stderr = process.stderr
         self.trace = []
         self.stderr = collections.deque([], 128)
-        self.inTrace = False
+        self.in_trace = False
         self.testcase = None
-        self.killOnOOM = killOnOOM
-        self.hadOOM = False
-        self.hitThreadLimit = False
+        self.kill_on_oom = kill_on_oom
+        self.had_oom = False
+        self.hit_thread_limit = False
         self.inited = False
         self.mid = mid
         self.mqueue = mqueue
@@ -79,12 +79,12 @@ class LibFuzzerMonitor(threading.Thread):
         self.exc = None
 
     def run(self):
-        assert not self.hitThreadLimit
-        assert not self.hadOOM
+        assert not self.hit_thread_limit
+        assert not self.had_oom
 
         try:
             while True:
-                line = self.fd.readline(4096)
+                line = self.process_stderr.readline(4096)
 
                 if not line:
                     break
@@ -106,17 +106,17 @@ class LibFuzzerMonitor(threading.Thread):
                         self.rss_mb = int(rss_match.group(1))
                 elif RE_LIBFUZZER_NEWPC.search(line):
                     self.last_new_pc = int(time.time())
-                elif self.inTrace:
+                elif self.in_trace:
                     self.trace.append(line.rstrip())
                     if line.find("==ABORTING") >= 0:
-                        self.inTrace = False
+                        self.in_trace = False
                 elif line.find("==ERROR: AddressSanitizer") >= 0:
                     self.trace.append(line.rstrip())
-                    self.inTrace = True
+                    self.in_trace = True
                 elif line.find("==AddressSanitizer: Thread limit") >= 0:
-                    self.hitThreadLimit = True
+                    self.hit_thread_limit = True
 
-                if not self.inTrace:
+                if not self.in_trace:
                     self.stderr.append(line)
 
                 if not self.inited and (
@@ -129,8 +129,11 @@ class LibFuzzerMonitor(threading.Thread):
 
                 # libFuzzer sometimes hangs on out-of-memory. Kill it
                 # right away if we detect this situation.
-                if self.killOnOOM and line.find("ERROR: libFuzzer: out-of-memory") >= 0:
-                    self.hadOOM = True
+                if (
+                    self.kill_on_oom
+                    and line.find("ERROR: libFuzzer: out-of-memory") >= 0
+                ):
+                    self.had_oom = True
                     self.process.kill()
 
                 # Pass-through output
@@ -139,9 +142,13 @@ class LibFuzzerMonitor(threading.Thread):
                 else:
                     sys.stderr.write(line)
 
-            self.fd.close()
+            self.process_stderr.close()
 
-            if self.hitThreadLimit and self.testcase and os.path.exists(self.testcase):
+            if (
+                self.hit_thread_limit
+                and self.testcase
+                and os.path.exists(self.testcase)
+            ):
                 # If we hit ASan's global thread limit, ignore the error and remove
                 # the resulting testcase, as it won't be useful anyway.
                 # Not that this thread limit is not a concurrent thread limit, but
@@ -149,19 +156,19 @@ class LibFuzzerMonitor(threading.Thread):
                 # lifetime of the process.
                 os.remove(self.testcase)
                 self.testcase = None
-        except Exception as e:
-            self.exc = e
+        except Exception as exc:  # pylint: disable=broad-except
+            self.exc = exc
         finally:
             if self.mqueue is not None:
                 self.mqueue.put(self.mid)
 
-    def getASanTrace(self):
+    def get_asan_trace(self):
         return self.trace
 
-    def getTestcase(self):
+    def get_testcase(self):
         return self.testcase
 
-    def getStderr(self):
+    def get_stderr(self):
         return list(self.stderr)
 
     def terminate(self):
@@ -172,10 +179,10 @@ class LibFuzzerMonitor(threading.Thread):
         self.process.terminate()
 
         # Emulate a wait() with timeout through poll and sleep
-        (maxSleepTime, pollInterval) = (10, 0.2)
-        while self.process.poll() is None and maxSleepTime > 0:
-            maxSleepTime -= pollInterval
-            time.sleep(pollInterval)
+        (max_sleep_time, poll_interval) = (10, 0.2)
+        while self.process.poll() is None and max_sleep_time > 0:
+            max_sleep_time -= poll_interval
+            time.sleep(poll_interval)
 
         # Process is still alive, kill it and wait
         if self.process.poll() is None:
@@ -225,7 +232,7 @@ def write_stats_file(outfile, fields, stats, warnings):
 
     max_keylen = max(len(x) for x in fields)
 
-    with InterProcessLock(outfile + ".lock"), open(outfile, "w") as f:
+    with InterProcessLock(outfile + ".lock"), open(outfile, "w") as out_fp:
         for field in fields:
             if field not in stats:
                 continue
@@ -235,12 +242,10 @@ def write_stats_file(outfile, fields, stats, warnings):
             if isinstance(val, list):
                 val = " ".join(val)
 
-            f.write(f"{field}{' ' * (max_keylen + 1 - len(field))}: {val}\n")
+            out_fp.write(f"{field}{' ' * (max_keylen + 1 - len(field))}: {val}\n")
 
         for warning in warnings:
-            f.write(warning)
-
-    return
+            out_fp.write(warning)
 
 
 def write_aggregated_stats_afl(base_dirs, outfile, cmdline_path=None):
@@ -370,10 +375,10 @@ def write_aggregated_stats_afl(base_dirs, outfile, cmdline_path=None):
             if crash_file.endswith(".failed"):
                 failed_reports += 1
     if failed_reports:
-        warnings.append("WARNING: Unreported crashes detected (%d)\n" % failed_reports)
+        warnings.append(f"WARNING: Unreported crashes detected ({failed_reports})\n")
 
     # Write out data
-    return write_stats_file(outfile, fields, aggregated_stats, warnings)
+    write_stats_file(outfile, fields, aggregated_stats, warnings)
 
 
 def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
@@ -478,7 +483,7 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
                 stats[field] = aggregated_stats[field]
 
     # Write out data
-    return write_stats_file(outfile, fields, aggregated_stats, warnings)
+    write_stats_file(outfile, fields, aggregated_stats, warnings)
 
 
 def scan_crashes(
@@ -562,19 +567,17 @@ def scan_crashes(
 
         configuration = ProgramConfiguration.fromBinary(cmdline[0])
         if not configuration:
-            print(
-                "Error: Creating program configuration from binary failed."
-                "Check your binary configuration file.",
-                file=sys.stderr,
+            raise Exception(
+                "Creating program configuration from binary failed. "
+                "Check your binary configuration file."
             )
-            return 2
 
         if firefox:
-            (ffpInst, ffCmd, ffEnv) = setup_firefox(
+            (ffp, ff_cmd, ff_env) = setup_firefox(
                 cmdline[0], firefox_prefs, firefox_extensions, firefox_testpath
             )
-            cmdline = ffCmd
-            base_env.update(ffEnv)
+            cmdline = ff_cmd
+            base_env.update(ff_env)
 
         for crash_file in crash_files:
             stdin = None
@@ -587,8 +590,8 @@ def scan_crashes(
             if transform:
                 try:
                     submission = apply_transform(transform, crash_file)
-                except Exception as e:
-                    print(e.args[1], file=sys.stderr)
+                except Exception as exc:  # pylint: disable=broad-except
+                    print(exc.args[1], file=sys.stderr)
 
             if test_idx is not None:
                 cmdline[test_idx] = orig_test_arg.replace("@@", crash_file)
@@ -608,9 +611,11 @@ def scan_crashes(
             if runner.run():
                 crash_info = runner.getCrashInfo(configuration)
                 collector.submit(crash_info, submission)
+                # pylint: disable=consider-using-with
                 open(submission + ".submitted", "a").close()
                 print("Success: Submitted crash to server.", file=sys.stderr)
             else:
+                # pylint: disable=consider-using-with
                 open(submission + ".failed", "a").close()
                 print(
                     "Error: Failed to reproduce the given crash, cannot submit.",
@@ -618,7 +623,7 @@ def scan_crashes(
                 )
 
         if firefox:
-            ffpInst.clean_up()
+            ffp.clean_up()
 
 
 def setup_firefox(bin_path, prefs_path, ext_paths, test_path):
@@ -647,6 +652,7 @@ def setup_firefox(bin_path, prefs_path, ext_paths, test_path):
 
 
 def test_binary_asan(bin_path):
+    # pylint: disable=consider-using-with
     process = subprocess.Popen(
         ["nm", "-g", bin_path],
         stdin=subprocess.PIPE,
@@ -681,8 +687,10 @@ def apply_transform(script_path, testcase_path):
     with tempfile.TemporaryDirectory() as output_path:
         try:
             subprocess.check_call([script_path, testcase_path, output_path])
-        except subprocess.CalledProcessError:
-            raise Exception("Failed to apply post crash transformation.  Aborting...")
+        except subprocess.CalledProcessError as exc:
+            raise Exception(
+                "Failed to apply post crash transformation.  Aborting..."
+            ) from exc
 
         if len(os.listdir(output_path)) == 0:
             raise Exception(
@@ -714,50 +722,50 @@ def main(argv=None):
         )
     )
 
-    mainGroup = parser.add_argument_group(title="Main Options", description=None)
-    aflGroup = parser.add_argument_group(
+    main_group = parser.add_argument_group(title="Main Options", description=None)
+    afl_group = parser.add_argument_group(
         title="AFL Options", description="Use these arguments in AFL mode."
     )
-    libfGroup = parser.add_argument_group(
+    libf_group = parser.add_argument_group(
         title="Libfuzzer Options", description="Use these arguments in Libfuzzer mode."
     )
-    fmGroup = parser.add_argument_group(
+    fm_group = parser.add_argument_group(
         title="FuzzManager Options",
         description="Use these to specify or override FuzzManager parameters."
         " Most of these parameters are typically specified in the global FuzzManager"
         " configuration file.",
     )
-    s3Group = parser.add_argument_group(
+    s3_group = parser.add_argument_group(
         title="AWS S3 Options",
         description="Use these arguments for various S3 actions"
         " and parameters related to operating libFuzzer/AFL within AWS and managing"
         " build, corpus and progress in S3.",
     )
 
-    fmOrLocalGroup = mainGroup.add_mutually_exclusive_group()
-    fmOrLocalGroup.add_argument(
+    fm_or_local_group = main_group.add_mutually_exclusive_group()
+    fm_or_local_group.add_argument(
         "--fuzzmanager",
         dest="fuzzmanager",
         action="store_true",
         help="Use FuzzManager to submit crash results",
     )
-    fmOrLocalGroup.add_argument(
+    fm_or_local_group.add_argument(
         "--local",
         dest="local",
         action="store_true",
         help="Don't submit crash results anywhere (default)",
     )
 
-    mainGroup.add_argument(
+    main_group.add_argument(
         "--libfuzzer",
         dest="libfuzzer",
         action="store_true",
         help="Enable libFuzzer mode",
     )
-    mainGroup.add_argument(
+    main_group.add_argument(
         "--aflfuzz", dest="aflfuzz", action="store_true", help="Enable AFL mode"
     )
-    mainGroup.add_argument(
+    main_group.add_argument(
         "--debug",
         dest="debug",
         action="store_true",
@@ -765,68 +773,68 @@ def main(argv=None):
             "Shows useful debug information (e.g. disables command output suppression)"
         ),
     )
-    mainGroup.add_argument(
+    main_group.add_argument(
         "--stats",
         dest="stats",
         help="Collect aggregated statistics in specified file",
         metavar="FILE",
     )
-    mainGroup.add_argument(
+    main_group.add_argument(
         "--transform",
         dest="transform",
         help="Apply post crash transformation to the testcase",
         metavar="FILE",
     )
 
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-queue-upload",
         dest="s3_queue_upload",
         action="store_true",
         help="Use S3 to synchronize queues",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-queue-cleanup",
         dest="s3_queue_cleanup",
         action="store_true",
         help="Cleanup S3 closed queues.",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-queue-status",
         dest="s3_queue_status",
         action="store_true",
         help="Display S3 queue status",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-build-download",
         dest="s3_build_download",
         help="Use S3 to download the build for the specified project",
         metavar="DIR",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-build-upload",
         dest="s3_build_upload",
         help="Use S3 to upload a new build for the specified project",
         metavar="FILE",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-corpus-download",
         dest="s3_corpus_download",
         help="Use S3 to download the test corpus for the specified project",
         metavar="DIR",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-corpus-download-size",
         dest="s3_corpus_download_size",
         help="When downloading the corpus, select only SIZE files randomly",
         metavar="SIZE",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-corpus-upload",
         dest="s3_corpus_upload",
         help="Use S3 to upload a test corpus for the specified project",
         metavar="DIR",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-corpus-replace",
         dest="s3_corpus_replace",
         action="store_true",
@@ -835,7 +843,7 @@ def main(argv=None):
             "files"
         ),
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-corpus-refresh",
         dest="s3_corpus_refresh",
         help=(
@@ -843,25 +851,25 @@ def main(argv=None):
         ),
         metavar="DIR",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-corpus-status",
         dest="s3_corpus_status",
         action="store_true",
         help="Display S3 corpus status",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--s3-bucket",
         dest="s3_bucket",
         help="Name of the S3 bucket to use",
         metavar="NAME",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--project",
         dest="project",
         help="Name of the subfolder/project inside the S3 bucket",
         metavar="NAME",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--build",
         dest="build",
         help=(
@@ -869,13 +877,13 @@ def main(argv=None):
         ),
         metavar="DIR",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--build-project",
         dest="build_project",
         help="If specified, this overrides --project for fetching the build from S3.",
         metavar="NAME",
     )
-    s3Group.add_argument(
+    s3_group.add_argument(
         "--build-zip-name",
         dest="build_zip_name",
         default="build.zip",
@@ -883,24 +891,24 @@ def main(argv=None):
         metavar="NAME",
     )
 
-    libfGroup.add_argument(
+    libf_group.add_argument(
         "--env",
         dest="env",
         nargs="+",
         type=str,
         help="List of environment variables in the form 'KEY=VALUE'",
     )
-    libfGroup.add_argument(
+    libf_group.add_argument(
         "--cmd", dest="cmd", action="store_true", help="Command with parameters to run"
     )
-    libfGroup.add_argument(
+    libf_group.add_argument(
         "--libfuzzer-restarts",
         dest="libfuzzer_restarts",
         type=int,
         help="Maximum number of restarts to do with libFuzzer",
         metavar="COUNT",
     )
-    libfGroup.add_argument(
+    libf_group.add_argument(
         "--libfuzzer-instances",
         dest="libfuzzer_instances",
         type=int,
@@ -908,14 +916,14 @@ def main(argv=None):
         help="Number of parallel libfuzzer instances to run",
         metavar="COUNT",
     )
-    libfGroup.add_argument(
+    libf_group.add_argument(
         "--libfuzzer-auto-reduce",
         dest="libfuzzer_auto_reduce",
         type=int,
         help="Auto-reduce the corpus once it has grown by this percentage",
         metavar="PERCENT",
     )
-    libfGroup.add_argument(
+    libf_group.add_argument(
         "--libfuzzer-auto-reduce-min",
         dest="libfuzzer_auto_reduce_min",
         type=int,
@@ -924,97 +932,97 @@ def main(argv=None):
         metavar="COUNT",
     )
 
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--custom-cmdline-file",
         dest="custom_cmdline_file",
         help="Path to custom cmdline file",
         metavar="FILE",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--env-file",
         dest="env_file",
         help="Path to a file with additional environment variables",
         metavar="FILE",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--serverhost",
         dest="serverhost",
         help="Server hostname for remote signature management.",
         metavar="HOST",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--serverport",
         dest="serverport",
         type=int,
         help="Server port to use",
         metavar="PORT",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--serverproto",
         dest="serverproto",
         help="Server protocol to use (default is https)",
         metavar="PROTO",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--serverauthtokenfile",
         dest="serverauthtokenfile",
         help="File containing the server authentication token",
         metavar="FILE",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--clientid",
         dest="clientid",
         help="Client ID to use when submitting issues",
         metavar="ID",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--platform",
         dest="platform",
         help="Platform this crash appeared on",
         metavar="(x86|x86-64|arm)",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--product",
         dest="product",
         help="Product this crash appeared on",
         metavar="PRODUCT",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--productversion",
         dest="product_version",
         help="Product version this crash appeared on",
         metavar="VERSION",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--os",
         dest="os",
         help="OS this crash appeared on",
         metavar="(windows|linux|macosx|b2g|android)",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--tool",
         dest="tool",
         help="Name of the tool that found this issue",
         metavar="NAME",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--metadata",
         dest="metadata",
         nargs="+",
         type=str,
         help="List of metadata variables in the form 'KEY=VALUE'",
     )
-    fmGroup.add_argument(
+    fm_group.add_argument(
         "--sigdir", dest="sigdir", help="Signature cache directory", metavar="DIR"
     )
 
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--test-file",
         dest="test_file",
         help="Optional path to copy the test file to before reproducing",
         metavar="FILE",
     )
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--afl-timeout",
         dest="afl_timeout",
         type=int,
@@ -1022,19 +1030,19 @@ def main(argv=None):
         help="Timeout per test to pass to AFL for corpus refreshing",
         metavar="MSECS",
     )
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--firefox",
         dest="firefox",
         action="store_true",
         help="Test Program is Firefox (requires FFPuppet installed)",
     )
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--firefox-prefs",
         dest="firefox_prefs",
         help="Path to prefs.js file for Firefox",
         metavar="FILE",
     )
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--firefox-extensions",
         nargs="+",
         type=str,
@@ -1042,13 +1050,13 @@ def main(argv=None):
         help="Path extension file for Firefox",
         metavar="FILE",
     )
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--firefox-testpath",
         dest="firefox_testpath",
         help="Path to file to open with Firefox",
         metavar="FILE",
     )
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--firefox-start-afl",
         dest="firefox_start_afl",
         metavar="FILE",
@@ -1057,25 +1065,25 @@ def main(argv=None):
             "passed to AFL"
         ),
     )
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--afl-output-dir",
         dest="afloutdir",
         help="Path to the AFL output directory to manage",
         metavar="DIR",
     )
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--afl-binary-dir",
         dest="aflbindir",
         help="Path to the AFL binary directory to use",
         metavar="DIR",
     )
-    aflGroup.add_argument(
+    afl_group.add_argument(
         "--afl-stats",
         dest="aflstats",
         help="Deprecated, use --stats instead",
         metavar="FILE",
     )
-    aflGroup.add_argument("rargs", nargs=argparse.REMAINDER)
+    afl_group.add_argument("rargs", nargs=argparse.REMAINDER)
 
     def warn_local():
         if not opts.fuzzmanager and not opts.local:
@@ -1115,8 +1123,8 @@ def main(argv=None):
     if opts.fuzzmanager:
         serverauthtoken = None
         if opts.serverauthtokenfile:
-            with open(opts.serverauthtokenfile) as f:
-                serverauthtoken = f.read().rstrip()
+            with open(opts.serverauthtokenfile) as token_fp:
+                serverauthtoken = token_fp.read().rstrip()
 
         collector = Collector(
             sigCacheDir=opts.sigdir,
@@ -1165,9 +1173,9 @@ def main(argv=None):
         status_data = s3m.get_queue_status()
         total_queue_files = 0
 
-        for queue_name in status_data:
-            print(f"Queue {queue_name}: {status_data[queue_name]}")
-            total_queue_files += status_data[queue_name]
+        for queue_name, status in status_data.items():
+            print(f"Queue {queue_name}: {status}")
+            total_queue_files += status
         print(f"Total queue files: {total_queue_files}")
 
         return 0
@@ -1223,8 +1231,8 @@ def main(argv=None):
         s3m.clean_queue_dirs()
 
         print(
-            "Downloading queues from s3://%s/%s/queues/ to %s"
-            % (opts.s3_bucket, opts.project, queues_dir)
+            f"Downloading queues from s3://{opts.s3_bucket}/{opts.project}/queues/ to "
+            f"{queues_dir}"
         )
         s3m.download_queue_dirs(opts.s3_corpus_refresh)
 
@@ -1287,8 +1295,8 @@ def main(argv=None):
 
         # Download our current corpus into the queues directory as well
         print(
-            "Downloading corpus from s3://%s/%s/corpus/ to %s"
-            % (opts.s3_bucket, opts.project, queues_dir)
+            f"Downloading corpus from s3://{opts.s3_bucket}/{opts.project}/corpus/ to "
+            f"{queues_dir}"
         )
         s3m.download_corpus(queues_dir)
 
@@ -1306,13 +1314,13 @@ def main(argv=None):
                 return 2
 
             if opts.firefox:
-                (ffpInst, ffCmd, ffEnv) = setup_firefox(
+                (ffp, ff_cmd, ff_env) = setup_firefox(
                     cmdline[0],
                     opts.firefox_prefs,
                     opts.firefox_extensions,
                     opts.firefox_testpath,
                 )
-                cmdline = ffCmd
+                cmdline = ff_cmd
 
             afl_cmdline = [
                 afl_cmin,
@@ -1338,14 +1346,14 @@ def main(argv=None):
                 env["LD_LIBRARY_PATH"] = os.path.dirname(cmdline[0])
 
                 if opts.firefox:
-                    env.update(ffEnv)
+                    env.update(ff_env)
 
                 if opts.debug:
                     devnull = None
                 subprocess.check_call(afl_cmdline, stdout=devnull, env=env)
 
             if opts.firefox:
-                ffpInst.clean_up()
+                ffp.clean_up()
         else:
             cmdline.extend(["-merge=1", updated_tests_dir, queues_dir])
 
@@ -1557,11 +1565,11 @@ def main(argv=None):
                 return 2
 
         # Write a cmdline file, similar to what our AFL fork does
-        with open("cmdline", "w") as fd:
+        with open("cmdline", "w") as cmdline_fd:
             for rarg in opts.rargs:
                 # Omit any corpus directory that is in the command line
                 if not os.path.isdir(rarg):
-                    print(rarg, file=fd)
+                    print(rarg, file=cmdline_fd)
 
         monitors = [None] * opts.libfuzzer_instances
         monitor_queue = queue.Queue()
@@ -1601,13 +1609,14 @@ def main(argv=None):
                     break
 
                 # Check if we need to (re)start any monitors
-                for i in range(len(monitors)):
-                    if monitors[i] is None:
+                for idx, monitor in enumerate(monitors):
+                    if monitor is None:
                         if restarts is not None:
                             restarts -= 1
                             if restarts < 0:
                                 break
 
+                        # pylint: disable=consider-using-with
                         process = subprocess.Popen(
                             cmdline,
                             # stdout=None,
@@ -1616,10 +1625,10 @@ def main(argv=None):
                             universal_newlines=True,
                         )
 
-                        monitors[i] = LibFuzzerMonitor(
-                            process, mid=i, mqueue=monitor_queue
+                        monitors[idx] = LibFuzzerMonitor(
+                            process, mid=idx, mqueue=monitor_queue
                         )
-                        monitors[i].start()
+                        monitors[idx].start()
 
                 corpus_size = None
                 if corpus_auto_reduce_threshold is not None or opts.stats:
@@ -1634,11 +1643,10 @@ def main(argv=None):
                     print("Preparing automated merge...", file=sys.stderr)
 
                     # Time to Auto-reduce
-                    for i in range(len(monitors)):
-                        monitor = monitors[i]
+                    for idx, monitor in enumerate(monitors):
                         if monitor is not None:
                             print(
-                                f"Asking monitor {i} to terminate...", file=sys.stderr
+                                f"Asking monitor {idx} to terminate...", file=sys.stderr
                             )
                             monitor.terminate()
                             monitor.join(30)
@@ -1647,7 +1655,7 @@ def main(argv=None):
 
                             # Indicate that this monitor is dead, so it is restarted
                             # later on
-                            monitors[i] = None
+                            monitors[idx] = None
 
                             if opts.stats:
                                 # Make sure the execs that this monitor did survive in
@@ -1762,9 +1770,9 @@ def main(argv=None):
                     f"Job {result} terminated, processing results...", file=sys.stderr
                 )
 
-                trace = monitor.getASanTrace()
-                testcase = monitor.getTestcase()
-                stderr = monitor.getStderr()
+                trace = monitor.get_asan_trace()
+                testcase = monitor.get_testcase()
+                stderr = monitor.get_stderr()
 
                 if not monitor.inited and not trace and not testcase:
                     print(
@@ -1775,7 +1783,7 @@ def main(argv=None):
 
                 # libFuzzer can exit due to OOM with and without a testcase.
                 # The case of having an OOM with a testcase is handled further below.
-                if not testcase and monitor.hadOOM:
+                if not testcase and monitor.had_oom:
                     stats["ooms"] += 1
                     continue
 
@@ -1862,19 +1870,19 @@ def main(argv=None):
                     # updated testcases
                     try:
                         testcase = apply_transform(opts.transform, testcase)
-                    except Exception as e:
-                        print(e.args[1], file=sys.stderr)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        print(exc.args[1], file=sys.stderr)
 
                 # If we run in local mode (no --fuzzmanager specified), then we just
                 # continue after each crash
                 if not opts.fuzzmanager:
                     continue
 
-                crashInfo = CrashInfo.fromRawCrashData(
+                crash_info = CrashInfo.fromRawCrashData(
                     [], stderr, configuration, auxCrashData=trace
                 )
 
-                (sigfile, metadata) = collector.search(crashInfo)
+                (sigfile, metadata) = collector.search(crash_info)
 
                 if sigfile is not None:
                     if last_signature == sigfile:
@@ -1889,19 +1897,18 @@ def main(argv=None):
                     )
                 else:
                     collector.generate(
-                        crashInfo,
+                        crash_info,
                         forceCrashAddress=True,
                         forceCrashInstruction=False,
                         numFrames=8,
                     )
-                    collector.submit(crashInfo, testcase)
+                    collector.submit(crash_info, testcase)
                     print("Successfully submitted crash.", file=sys.stderr)
         finally:
             try:
                 # Before doing anything, try to shutdown our monitors
-                for i in range(len(monitors)):
-                    if monitors[i] is not None:
-                        monitor = monitors[i]
+                for monitor in monitors:
+                    if monitor is not None:
                         monitor.terminate()
                         monitor.join(10)
             finally:
@@ -1914,7 +1921,7 @@ def main(argv=None):
 
     if opts.aflfuzz:
         if opts.firefox or opts.firefox_start_afl:
-            if not haveFFPuppet:
+            if not HAVE_FFPUPPET:
                 print(
                     "Error: --firefox and --firefox-start-afl require FFPuppet to be "
                     "installed",
@@ -1962,7 +1969,7 @@ def main(argv=None):
 
             try:
                 subprocess.call(afl_cmd, env=env)
-            except Exception:
+            except Exception:  # pylint: disable=broad-except
                 traceback.print_exc()
 
             ffp.clean_up()
@@ -2033,3 +2040,5 @@ def main(argv=None):
                     )
 
                 time.sleep(10)
+
+    return 0
