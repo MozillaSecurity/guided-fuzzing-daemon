@@ -1,10 +1,10 @@
 import collections
 import os
-import os.path
 import re
 import sys
 import threading
 import time
+from pathlib import Path
 
 from .utils import write_stats_file
 
@@ -114,7 +114,7 @@ class LibFuzzerMonitor(threading.Thread):
             if (
                 self.hit_thread_limit
                 and self.testcase
-                and os.path.exists(self.testcase)
+                and Path(self.testcase).exists()
             ):
                 # If we hit ASan's global thread limit, ignore the error and remove
                 # the resulting testcase, as it won't be useful anyway.

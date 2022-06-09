@@ -1,5 +1,4 @@
 import os
-import os.path
 import subprocess
 import tempfile
 import zipfile
@@ -43,7 +42,7 @@ def apply_transform(script_path, testcase_path):
 
         archive_path = testcase_path + ".zip"
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.write(testcase_path, os.path.basename(testcase_path))
+            archive.write(testcase_path, Path(testcase_path).name)
             for file in Path(output_path).rglob("*.*"):
                 archive.write(str(file), arcname=file.relative_to(output_path))
 

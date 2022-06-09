@@ -1,14 +1,14 @@
 import argparse
-import os.path
 import sys
 import time
+from pathlib import Path
 
 
 def parse_args(argv=None):
     if argv is None:
         argv = sys.argv.copy()
 
-    program_name = os.path.basename(argv.pop(0))
+    program_name = Path(argv.pop(0)).name
 
     # setup argparser
     parser = argparse.ArgumentParser(
@@ -400,7 +400,7 @@ def parse_args(argv=None):
     if opts.libfuzzer and opts.aflfuzz:
         parser.error("Error: --libfuzzer and --aflfuzz are mutually exclusive.")
 
-    if opts.transform and not os.path.isfile(opts.transform):
+    if opts.transform and not Path(opts.transform).is_file():
         parser.error(f"Error: Failed to locate transformation script {opts.transform}")
 
     return opts

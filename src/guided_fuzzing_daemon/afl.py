@@ -1,6 +1,7 @@
 import os.path
 import shutil
 import sys
+from pathlib import Path
 
 from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Running.AutoRunner import AutoRunner
@@ -156,12 +157,10 @@ def scan_crashes(
             if runner.run():
                 crash_info = runner.getCrashInfo(configuration)
                 collector.submit(crash_info, submission)
-                # pylint: disable=consider-using-with
-                open(submission + ".submitted", "ab").close()
+                Path(submission + ".submitted").touch()
                 print("Success: Submitted crash to server.", file=sys.stderr)
             else:
-                # pylint: disable=consider-using-with
-                open(submission + ".failed", "ab").close()
+                Path(submission + ".failed").touch()
                 print(
                     "Error: Failed to reproduce the given crash, cannot submit.",
                     file=sys.stderr,

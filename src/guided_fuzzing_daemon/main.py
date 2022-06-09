@@ -12,6 +12,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 @contact:    choller@mozilla.com
 """
 import os
+import os.path
 import queue
 import shutil
 import stat
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import time
 import traceback
+from pathlib import Path
 
 from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
@@ -40,8 +42,7 @@ def main(argv=None):
     if opts.fuzzmanager:
         serverauthtoken = None
         if opts.serverauthtokenfile:
-            with open(opts.serverauthtokenfile) as token_fp:
-                serverauthtoken = token_fp.read().rstrip()
+            serverauthtoken = Path(opts.serverauthtokenfile).read_text().rstrip()
 
         collector = Collector(
             sigCacheDir=opts.sigdir,
@@ -181,11 +182,10 @@ def main(argv=None):
             print("Downloading build")
             s3m.download_build(build_path)
 
-        with open(os.path.join(opts.s3_corpus_refresh, "cmdline")) as cmdline_file:
-            cmdline = cmdline_file.read().splitlines()
+        cmdline = (Path(opts.s3_corpus_refresh) / "cmdline").read_text().splitlines()
 
         # Assume cmdline[0] is the name of the binary
-        binary_name = os.path.basename(cmdline[0])
+        binary_name = Path(cmdline[0]).name
 
         # Try locating our binary in the build we just unpacked
         binary_search_result = [
@@ -196,7 +196,7 @@ def main(argv=None):
                 filename == binary_name
                 and (
                     stat.S_IXUSR
-                    & os.stat(os.path.join(dirpath, filename))[stat.ST_MODE]
+                    & (Path(dirpath) / filename).stat().st_mode
                 )
             )
         ]
@@ -266,7 +266,7 @@ def main(argv=None):
 
             print("Running afl-cmin")
             env = os.environ.copy()
-            env["LD_LIBRARY_PATH"] = os.path.dirname(cmdline[0])
+            env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
             if opts.firefox:
                 env.update(ff_env)
             devnull = subprocess.DEVNULL
@@ -288,7 +288,7 @@ def main(argv=None):
 
             print("Running libFuzzer merge")
             env = os.environ.copy()
-            env["LD_LIBRARY_PATH"] = os.path.dirname(cmdline[0])
+            env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
             devnull = subprocess.DEVNULL
             if opts.debug:
                 devnull = None
@@ -426,7 +426,7 @@ def main(argv=None):
 
             # Set LD_LIBRARY_PATH for convenience
             if "LD_LIBRARY_PATH" not in env:
-                env["LD_LIBRARY_PATH"] = os.path.dirname(binary)
+                env["LD_LIBRARY_PATH"] = str(Path(binary).parent)
 
         signature_repeat_count = 0
         last_signature = None
@@ -595,7 +595,7 @@ def main(argv=None):
 
                     # Filter all directories on the command line, these are likely
                     # corpus dirs
-                    merge_cmdline = [x for x in merge_cmdline if not os.path.isdir(x)]
+                    merge_cmdline = [x for x in merge_cmdline if not Path(x).is_dir()]
 
                     # Filter out other stuff we don't want for merging
                     merge_cmdline = [
@@ -607,7 +607,7 @@ def main(argv=None):
 
                     print("Running automated merge...", file=sys.stderr)
                     env = os.environ.copy()
-                    env["LD_LIBRARY_PATH"] = os.path.dirname(merge_cmdline[0])
+                    env["LD_LIBRARY_PATH"] = str(Path(merge_cmdline[0]).parent)
                     devnull = subprocess.DEVNULL
                     if opts.debug:
                         devnull = None
@@ -716,20 +716,20 @@ def main(argv=None):
 
                 # Ignore slow units and oom files
                 if testcase is not None:
-                    testcase_name = os.path.basename(testcase)
+                    testcase_name = Path(testcase).name
 
                     if not monitor.inited:
                         if testcase_name.startswith("oom-") or testcase_name.startswith(
                             "timeout-"
                         ):
                             hashname = testcase_name.split("-")[1]
-                            potential_corpus_file = os.path.join(corpus_dir, hashname)
-                            if os.path.exists(potential_corpus_file):
+                            potential_corpus_file = Path(corpus_dir) / hashname
+                            if potential_corpus_file.exists():
                                 print(
                                     f"Removing problematic corpus file {hashname}...",
                                     file=sys.stderr,
                                 )
-                                os.remove(potential_corpus_file)
+                                potential_corpus_file.unlink()
                                 removed_corpus_files.add(potential_corpus_file)
 
                             if potential_corpus_file in removed_corpus_files:
@@ -882,7 +882,7 @@ def main(argv=None):
                 opts.firefox_testpath,
             )
 
-            afl_cmd = [os.path.join(opts.aflbindir, "afl-fuzz")]
+            afl_cmd = [str(Path(opts.aflbindir) / "afl-fuzz")]
 
             opts.rargs.remove("--")
 
@@ -899,16 +899,14 @@ def main(argv=None):
 
         afl_out_dirs = []
         if opts.afloutdir:
-            if not os.path.exists(os.path.join(opts.afloutdir, "crashes")):
+            if not (Path(opts.afloutdir) / "crashes").exists():
                 # The specified directory doesn't have a "crashes" sub directory.
                 # Either the wrong directory was specified, or this is an AFL
                 # multi-process synchronization directory. Try to figure this out here.
                 sync_dirs = os.listdir(opts.afloutdir)
 
                 for sync_dir in sync_dirs:
-                    if os.path.exists(
-                        os.path.join(opts.afloutdir, sync_dir, "crashes")
-                    ):
+                    if (Path(opts.afloutdir) / sync_dir / "crashes").exists():
                         afl_out_dirs.append(os.path.join(opts.afloutdir, sync_dir))
 
                 if not afl_out_dirs:
