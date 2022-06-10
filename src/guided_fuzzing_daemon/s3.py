@@ -16,15 +16,19 @@ import os
 import platform
 import random
 import shutil
+import stat
 import subprocess
 import sys
 import time
+from pathlib import Path
 from tempfile import mkstemp
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from boto.s3.connection import S3Connection
 from boto.s3.key import Key
 from boto.utils import parse_ts as boto_parse_ts
+
+from .utils import setup_firefox
 
 
 class S3Manager:
@@ -41,6 +45,9 @@ class S3Manager:
         @type cmdline_file: String
         @param cmdline_file: Path to the cmdline file to upload.
         """
+        assert bucket_name
+        assert project_name
+
         self.bucket_name = bucket_name
         self.project_name = project_name
         self.build_project_name = build_project_name
@@ -568,3 +575,221 @@ class S3Manager:
                 # Newer libFuzzer can delete files from the corpus if it finds a shorter
                 # version in the same run.
                 pass
+
+
+def s3_main(opts):
+    s3m = S3Manager(
+        opts.s3_bucket, opts.project, opts.build_project, opts.build_zip_name
+    )
+
+    if opts.s3_build_download:
+        s3m.download_build(opts.s3_build_download)
+
+    elif opts.s3_build_upload:
+        s3m.upload_build(opts.s3_build_upload)
+
+    elif opts.s3_corpus_download:
+        s3m.download_corpus(opts.s3_corpus_download, opts.s3_corpus_download_size)
+
+    elif opts.s3_corpus_refresh:
+        if not os.path.exists(opts.s3_corpus_refresh):
+            os.makedirs(opts.s3_corpus_refresh)
+
+        queues_dir = os.path.join(opts.s3_corpus_refresh, "queues")
+
+        print(f"Cleaning old queues from s3://{opts.s3_bucket}/{opts.project}/queues/")
+        s3m.clean_queue_dirs()
+
+        print(
+            f"Downloading queues from s3://{opts.s3_bucket}/{opts.project}/queues/ to "
+            f"{queues_dir}"
+        )
+        s3m.download_queue_dirs(opts.s3_corpus_refresh)
+
+        cmdline_file = os.path.join(opts.s3_corpus_refresh, "cmdline")
+        if not os.path.exists(cmdline_file):
+            # this can happen in a few legitimate cases:
+            #  - project folder does not exist at all (new project)
+            #  - only closed queues existed (old project)
+            #  - no queues exist (recently refreshed manually)
+            # print the error, but return 0
+            print(
+                "Error: Failed to download a cmdline file from queue directories.",
+                file=sys.stderr,
+            )
+            return 0
+
+        build_path = os.path.join(opts.s3_corpus_refresh, "build")
+
+        if opts.build:
+            build_path = opts.build
+        else:
+            print("Downloading build")
+            s3m.download_build(build_path)
+
+        cmdline = (Path(opts.s3_corpus_refresh) / "cmdline").read_text().splitlines()
+
+        # Assume cmdline[0] is the name of the binary
+        binary_name = Path(cmdline[0]).name
+
+        # Try locating our binary in the build we just unpacked
+        binary_search_result = [
+            os.path.join(dirpath, filename)
+            for dirpath, dirnames, filenames in os.walk(build_path)
+            for filename in filenames
+            if (
+                filename == binary_name
+                and (stat.S_IXUSR & (Path(dirpath) / filename).stat().st_mode)
+            )
+        ]
+
+        if not binary_search_result:
+            print(
+                f"Error: Failed to locate binary {binary_name} in unpacked build.",
+                file=sys.stderr,
+            )
+            return 2
+
+        if len(binary_search_result) > 1:
+            print(
+                f"Error: Binary name {binary_name} is ambiguous in unpacked build.",
+                file=sys.stderr,
+            )
+            return 2
+
+        cmdline[0] = binary_search_result[0]
+
+        # Download our current corpus into the queues directory as well
+        print(
+            f"Downloading corpus from s3://{opts.s3_bucket}/{opts.project}/corpus/ to "
+            f"{queues_dir}"
+        )
+        s3m.download_corpus(queues_dir)
+
+        # Ensure the directory for our new tests is empty
+        updated_tests_dir = os.path.join(opts.s3_corpus_refresh, "tests")
+        if os.path.exists(updated_tests_dir):
+            shutil.rmtree(updated_tests_dir)
+        os.mkdir(updated_tests_dir)
+
+        if opts.mode == "aflfuzz":
+            assert opts.aflbindir
+
+            # Run afl-cmin
+            afl_cmin = os.path.join(opts.aflbindir, "afl-cmin")
+            if not os.path.exists(afl_cmin):
+                print("Error: Unable to locate afl-cmin binary.", file=sys.stderr)
+                return 2
+
+            if opts.firefox:
+                (ffp, ff_cmd, ff_env) = setup_firefox(
+                    cmdline[0],
+                    opts.firefox_prefs,
+                    opts.firefox_extensions,
+                    opts.firefox_testpath,
+                )
+                cmdline = ff_cmd
+
+            afl_cmdline = [
+                afl_cmin,
+                "-e",
+                "-i",
+                queues_dir,
+                "-o",
+                updated_tests_dir,
+                "-t",
+                str(opts.afl_timeout),
+                "-m",
+                "none",
+            ]
+
+            if opts.test_file:
+                afl_cmdline.extend(["-f", opts.test_file])
+
+            afl_cmdline.extend(cmdline)
+
+            print("Running afl-cmin")
+            env = os.environ.copy()
+            env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
+            if opts.firefox:
+                env.update(ff_env)
+            devnull = subprocess.DEVNULL
+            if opts.debug:
+                devnull = None
+            subprocess.run(afl_cmdline, stdout=devnull, env=env, check=True)
+
+            if opts.firefox:
+                ffp.clean_up()
+        else:
+            cmdline.extend(["-merge=1", updated_tests_dir, queues_dir])
+
+            # Filter out any -dict arguments that we don't need anyway for merging
+            cmdline = [x for x in cmdline if not x.startswith("-dict=")]
+
+            # Filter out any -max_len arguments because the length should only be
+            # enforced by the instance(s) doing the actual testing.
+            cmdline = [x for x in cmdline if not x.startswith("-max_len=")]
+
+            print("Running libFuzzer merge")
+            env = os.environ.copy()
+            env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
+            devnull = subprocess.DEVNULL
+            if opts.debug:
+                devnull = None
+            subprocess.run(cmdline, stdout=devnull, env=env, check=True)
+
+        if not os.listdir(updated_tests_dir):
+            print(
+                "Error: Merge returned empty result, refusing to upload.",
+                file=sys.stderr,
+            )
+            return 2
+
+        # replace existing corpus with reduced corpus
+        print(
+            f"Uploading reduced corpus to s3://{opts.s3_bucket}/{opts.project}/corpus/"
+        )
+        s3m.upload_corpus(updated_tests_dir, corpus_delete=True)
+
+        # Prune the queues directory once we successfully uploaded the new
+        # test corpus, but leave everything that's part of our new corpus
+        # so we don't have to download those files again.
+        test_files = [
+            file
+            for file in os.listdir(updated_tests_dir)
+            if os.path.isfile(os.path.join(updated_tests_dir, file))
+        ]
+        obsolete_queue_files = [
+            file
+            for file in os.listdir(queues_dir)
+            if os.path.isfile(os.path.join(queues_dir, file)) and file not in test_files
+        ]
+
+        for file in obsolete_queue_files:
+            os.remove(os.path.join(queues_dir, file))
+
+    elif opts.s3_corpus_status:
+        status_data = s3m.get_corpus_status()
+        total_corpus_files = 0
+
+        for (status_dt, status_cnt) in sorted(status_data.items()):
+            print(f"Added {status_dt}: {status_cnt}")
+            total_corpus_files += status_cnt
+        print(f"Total corpus files: {total_corpus_files}")
+
+    elif opts.s3_corpus_upload:
+        s3m.upload_corpus(opts.s3_corpus_upload, opts.s3_corpus_replace)
+
+    elif opts.s3_queue_cleanup:
+        s3m.clean_queue_dirs()
+
+    elif opts.s3_queue_status:
+        status_data = s3m.get_queue_status()
+        total_queue_files = 0
+
+        for queue_name, status in status_data.items():
+            print(f"Queue {queue_name}: {status}")
+            total_queue_files += status
+        print(f"Total queue files: {total_queue_files}")
+
+    return 0

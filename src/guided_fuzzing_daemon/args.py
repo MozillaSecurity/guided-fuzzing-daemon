@@ -3,6 +3,8 @@ import sys
 import time
 from pathlib import Path
 
+from .utils import HAVE_FFPUPPET
+
 
 def parse_args(argv=None):
     if argv is None:
@@ -41,29 +43,32 @@ def parse_args(argv=None):
     fm_or_local_group = main_group.add_mutually_exclusive_group()
     fm_or_local_group.add_argument(
         "--fuzzmanager",
-        dest="fuzzmanager",
         action="store_true",
         help="Use FuzzManager to submit crash results",
     )
     fm_or_local_group.add_argument(
         "--local",
-        dest="local",
         action="store_true",
         help="Don't submit crash results anywhere (default)",
     )
 
-    main_group.add_argument(
+    mode_group = main_group.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--libfuzzer",
-        dest="libfuzzer",
-        action="store_true",
+        action="store_const",
+        const="libfuzzer",
+        dest="mode",
         help="Enable libFuzzer mode",
     )
-    main_group.add_argument(
-        "--aflfuzz", dest="aflfuzz", action="store_true", help="Enable AFL mode"
+    mode_group.add_argument(
+        "--aflfuzz",
+        action="store_const",
+        const="aflfuzz",
+        dest="mode",
+        help="Enable AFL mode",
     )
     main_group.add_argument(
         "--debug",
-        dest="debug",
         action="store_true",
         help=(
             "Shows useful debug information (e.g. disables command output suppression)"
@@ -71,68 +76,58 @@ def parse_args(argv=None):
     )
     main_group.add_argument(
         "--stats",
-        dest="stats",
         help="Collect aggregated statistics in specified file",
         metavar="FILE",
     )
     main_group.add_argument(
         "--transform",
-        dest="transform",
         help="Apply post crash transformation to the testcase",
         metavar="FILE",
     )
 
     s3_group.add_argument(
         "--s3-queue-upload",
-        dest="s3_queue_upload",
         action="store_true",
         help="Use S3 to synchronize queues",
     )
     s3_group.add_argument(
         "--s3-queue-cleanup",
-        dest="s3_queue_cleanup",
         action="store_true",
         help="Cleanup S3 closed queues.",
     )
     s3_group.add_argument(
         "--s3-queue-status",
-        dest="s3_queue_status",
         action="store_true",
         help="Display S3 queue status",
     )
     s3_group.add_argument(
         "--s3-build-download",
-        dest="s3_build_download",
         help="Use S3 to download the build for the specified project",
         metavar="DIR",
     )
     s3_group.add_argument(
         "--s3-build-upload",
-        dest="s3_build_upload",
         help="Use S3 to upload a new build for the specified project",
         metavar="FILE",
     )
     s3_group.add_argument(
         "--s3-corpus-download",
-        dest="s3_corpus_download",
         help="Use S3 to download the test corpus for the specified project",
         metavar="DIR",
     )
     s3_group.add_argument(
         "--s3-corpus-download-size",
-        dest="s3_corpus_download_size",
+        type=int,
         help="When downloading the corpus, select only SIZE files randomly",
         metavar="SIZE",
     )
     s3_group.add_argument(
         "--s3-corpus-upload",
-        dest="s3_corpus_upload",
         help="Use S3 to upload a test corpus for the specified project",
         metavar="DIR",
     )
     s3_group.add_argument(
         "--s3-corpus-replace",
-        dest="s3_corpus_replace",
         action="store_true",
         help=(
             "In conjunction with --s3-corpus-upload, deletes all other remote test "
@@ -141,7 +136,6 @@ def parse_args(argv=None):
     )
     s3_group.add_argument(
         "--s3-corpus-refresh",
-        dest="s3_corpus_refresh",
         help=(
             "Download queues and corpus from S3, combine and minimize, then re-upload."
         ),
@@ -149,25 +143,21 @@ def parse_args(argv=None):
     )
     s3_group.add_argument(
         "--s3-corpus-status",
-        dest="s3_corpus_status",
         action="store_true",
         help="Display S3 corpus status",
     )
     s3_group.add_argument(
         "--s3-bucket",
-        dest="s3_bucket",
         help="Name of the S3 bucket to use",
         metavar="NAME",
     )
     s3_group.add_argument(
         "--project",
-        dest="project",
         help="Name of the subfolder/project inside the S3 bucket",
         metavar="NAME",
     )
     s3_group.add_argument(
         "--build",
-        dest="build",
         help=(
             "Local build directory to use during corpus refresh instead of downloading."
         ),
@@ -175,13 +165,11 @@ def parse_args(argv=None):
     )
     s3_group.add_argument(
         "--build-project",
-        dest="build_project",
         help="If specified, this overrides --project for fetching the build from S3.",
         metavar="NAME",
     )
     s3_group.add_argument(
         "--build-zip-name",
-        dest="build_zip_name",
         default="build.zip",
         help="Override default build.zip name when working with S3 builds.",
         metavar="NAME",
@@ -189,24 +177,21 @@ def parse_args(argv=None):
 
     libf_group.add_argument(
         "--env",
-        dest="env",
         nargs="+",
         type=str,
         help="List of environment variables in the form 'KEY=VALUE'",
     )
     libf_group.add_argument(
-        "--cmd", dest="cmd", action="store_true", help="Command with parameters to run"
+        "--cmd", action="store_true", help="Command with parameters to run"
     )
     libf_group.add_argument(
         "--libfuzzer-restarts",
-        dest="libfuzzer_restarts",
         type=int,
         help="Maximum number of restarts to do with libFuzzer",
         metavar="COUNT",
     )
     libf_group.add_argument(
         "--libfuzzer-instances",
-        dest="libfuzzer_instances",
         type=int,
         default=1,
         help="Number of parallel libfuzzer instances to run",
@@ -214,14 +199,12 @@ def parse_args(argv=None):
     )
     libf_group.add_argument(
         "--libfuzzer-auto-reduce",
-        dest="libfuzzer_auto_reduce",
         type=int,
         help="Auto-reduce the corpus once it has grown by this percentage",
         metavar="PERCENT",
     )
     libf_group.add_argument(
         "--libfuzzer-auto-reduce-min",
-        dest="libfuzzer_auto_reduce_min",
         type=int,
         default=1000,
         help="Minimum corpus size for auto-reduce to apply.",
@@ -230,56 +213,47 @@ def parse_args(argv=None):
 
     fm_group.add_argument(
         "--custom-cmdline-file",
-        dest="custom_cmdline_file",
         help="Path to custom cmdline file",
         metavar="FILE",
     )
     fm_group.add_argument(
         "--env-file",
-        dest="env_file",
         help="Path to a file with additional environment variables",
         metavar="FILE",
     )
     fm_group.add_argument(
         "--serverhost",
-        dest="serverhost",
         help="Server hostname for remote signature management.",
         metavar="HOST",
     )
     fm_group.add_argument(
         "--serverport",
-        dest="serverport",
         type=int,
         help="Server port to use",
         metavar="PORT",
     )
     fm_group.add_argument(
         "--serverproto",
-        dest="serverproto",
         help="Server protocol to use (default is https)",
         metavar="PROTO",
     )
     fm_group.add_argument(
         "--serverauthtokenfile",
-        dest="serverauthtokenfile",
         help="File containing the server authentication token",
         metavar="FILE",
     )
     fm_group.add_argument(
         "--clientid",
-        dest="clientid",
         help="Client ID to use when submitting issues",
         metavar="ID",
     )
     fm_group.add_argument(
         "--platform",
-        dest="platform",
         help="Platform this crash appeared on",
         metavar="(x86|x86-64|arm)",
     )
     fm_group.add_argument(
         "--product",
-        dest="product",
         help="Product this crash appeared on",
         metavar="PRODUCT",
     )
@@ -291,36 +265,29 @@ def parse_args(argv=None):
     )
     fm_group.add_argument(
         "--os",
-        dest="os",
         help="OS this crash appeared on",
         metavar="(windows|linux|macosx|b2g|android)",
     )
     fm_group.add_argument(
         "--tool",
-        dest="tool",
         help="Name of the tool that found this issue",
         metavar="NAME",
     )
     fm_group.add_argument(
         "--metadata",
-        dest="metadata",
         nargs="+",
         type=str,
         help="List of metadata variables in the form 'KEY=VALUE'",
     )
-    fm_group.add_argument(
-        "--sigdir", dest="sigdir", help="Signature cache directory", metavar="DIR"
-    )
+    fm_group.add_argument("--sigdir", help="Signature cache directory", metavar="DIR")
 
     afl_group.add_argument(
         "--test-file",
-        dest="test_file",
         help="Optional path to copy the test file to before reproducing",
         metavar="FILE",
     )
     afl_group.add_argument(
         "--afl-timeout",
-        dest="afl_timeout",
         type=int,
         default=1000,
         help="Timeout per test to pass to AFL for corpus refreshing",
@@ -328,13 +295,11 @@ def parse_args(argv=None):
     )
     afl_group.add_argument(
         "--firefox",
-        dest="firefox",
         action="store_true",
         help="Test Program is Firefox (requires FFPuppet installed)",
     )
     afl_group.add_argument(
         "--firefox-prefs",
-        dest="firefox_prefs",
         help="Path to prefs.js file for Firefox",
         metavar="FILE",
     )
@@ -342,19 +307,16 @@ def parse_args(argv=None):
         "--firefox-extensions",
         nargs="+",
         type=str,
-        dest="firefox_extensions",
         help="Path extension file for Firefox",
         metavar="FILE",
     )
     afl_group.add_argument(
         "--firefox-testpath",
-        dest="firefox_testpath",
         help="Path to file to open with Firefox",
         metavar="FILE",
     )
     afl_group.add_argument(
         "--firefox-start-afl",
-        dest="firefox_start_afl",
         metavar="FILE",
         help=(
             "Start AFL with the given Firefox binary, remaining arguments being "
@@ -386,21 +348,87 @@ def parse_args(argv=None):
         parser.print_help()
         parser.exit(2)
 
+    # For backwards compatibility, --aflfuzz is the default if nothing else is
+    # specified.
+    parser.set_defaults(
+        mode="aflfuzz",
+    )
+
     opts = parser.parse_args(argv)
 
     if opts.aflstats:
         print("Error: --afl-stats is deprecated, use --stats instead.", file=sys.stderr)
         time.sleep(2)
 
-    if not opts.libfuzzer and not opts.aflfuzz:
-        # For backwards compatibility, --aflfuzz is the default if nothing else is
-        # specified.
-        opts.aflfuzz = True
-
-    if opts.libfuzzer and opts.aflfuzz:
-        parser.error("Error: --libfuzzer and --aflfuzz are mutually exclusive.")
-
     if opts.transform and not Path(opts.transform).is_file():
         parser.error(f"Error: Failed to locate transformation script {opts.transform}")
+
+    if (
+        opts.s3_queue_upload
+        or opts.s3_corpus_refresh
+        or opts.s3_build_download
+        or opts.s3_build_upload
+        or opts.s3_corpus_download
+        or opts.s3_corpus_upload
+        or opts.s3_queue_status
+        or opts.s3_corpus_status
+        or opts.s3_queue_cleanup
+    ):
+        if not opts.s3_bucket or not opts.project:
+            parser.error(
+                "Error: Must specify both --s3-bucket and --project for S3 actions"
+            )
+
+    if opts.s3_corpus_refresh:
+        if opts.mode == "aflfuzz" and not opts.aflbindir:
+            parser.error(
+                "Error: Must specify --afl-binary-dir for refreshing the test corpus"
+            )
+
+    if opts.mode == "libfuzzer":
+        if not opts.rargs:
+            parser.error("Error: No arguments specified")
+
+    if opts.libfuzzer_auto_reduce is not None:
+        if opts.libfuzzer_auto_reduce < 5:
+            parser.error("Error: Auto reduce threshold should at least be 5%.")
+
+    if opts.mode == "aflfuzz":
+        if opts.cmd and not opts.firefox:
+            parser.error(
+                "Error: Use --cmd either with libfuzzer or with afl in firefox mode"
+            )
+
+        if opts.firefox or opts.firefox_start_afl:
+            if not HAVE_FFPUPPET:
+                parser.error(
+                    "Error: --firefox and --firefox-start-afl require FFPuppet to be "
+                    "installed"
+                )
+
+            if opts.custom_cmdline_file:
+                parser.error(
+                    "Error: --custom-cmdline-file is incompatible with firefox options"
+                )
+
+            if not opts.firefox_prefs or not opts.firefox_testpath:
+                parser.error(
+                    "Error: --firefox and --firefox-start-afl require --firefox-prefs"
+                    "and --firefox-testpath to be specified"
+                )
+
+        if opts.firefox_start_afl:
+            if not opts.aflbindir:
+                parser.error(
+                    "Error: Must specify --afl-binary-dir for starting AFL with "
+                    "firefox"
+                )
+
+        # Upload and FuzzManager modes require specifying the AFL directory
+        if opts.s3_queue_upload or opts.fuzzmanager:
+            if not opts.afloutdir:
+                parser.error(
+                    "Error: Must specify AFL output directory using --afl-output-dir"
+                )
 
     return opts

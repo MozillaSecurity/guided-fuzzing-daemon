@@ -1,12 +1,21 @@
 import os.path
 import shutil
+import subprocess
 import sys
+import time
+import traceback
 from pathlib import Path
 
 from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Running.AutoRunner import AutoRunner
 
-from .utils import apply_transform, setup_firefox, write_stats_file
+from .utils import (
+    HAVE_FFPUPPET,
+    apply_transform,
+    setup_firefox,
+    warn_local,
+    write_stats_file,
+)
 
 
 def command_file_to_list(cmd_file):
@@ -301,3 +310,97 @@ def write_aggregated_stats_afl(base_dirs, outfile, cmdline_path=None):
 
     # Write out data
     write_stats_file(outfile, fields, aggregated_stats, warnings)
+
+
+def aflfuzz_main(opts, collector, s3m):
+    assert not opts.cmd or opts.firefox
+
+    if opts.firefox or opts.firefox_start_afl:
+        assert HAVE_FFPUPPET
+        assert not opts.custom_cmdline_file
+        assert opts.firefox_prefs and opts.firefox_testpath
+
+    if opts.firefox_start_afl:
+        assert opts.aflbindir
+
+        (ffp, cmd, env) = setup_firefox(
+            opts.firefox_start_afl,
+            opts.firefox_prefs,
+            opts.firefox_extensions,
+            opts.firefox_testpath,
+        )
+
+        afl_cmd = [str(Path(opts.aflbindir) / "afl-fuzz")]
+
+        opts.rargs.remove("--")
+
+        afl_cmd.extend(opts.rargs)
+        afl_cmd.extend(cmd)
+
+        try:
+            subprocess.run(afl_cmd, env=env)
+        except Exception:  # pylint: disable=broad-except
+            traceback.print_exc()
+
+        ffp.clean_up()
+        return 0
+
+    afl_out_dirs = []
+    if opts.afloutdir:
+        if not (Path(opts.afloutdir) / "crashes").exists():
+            # The specified directory doesn't have a "crashes" sub directory.
+            # Either the wrong directory was specified, or this is an AFL
+            # multi-process synchronization directory. Try to figure this out here.
+            sync_dirs = os.listdir(opts.afloutdir)
+
+            for sync_dir in sync_dirs:
+                if (Path(opts.afloutdir) / sync_dir / "crashes").exists():
+                    afl_out_dirs.append(os.path.join(opts.afloutdir, sync_dir))
+
+            if not afl_out_dirs:
+                print(
+                    f"Error: Directory {opts.afloutdir} does not appear to be a "
+                    "valid AFL output/sync directory",
+                    file=sys.stderr,
+                )
+                return 2
+        else:
+            afl_out_dirs.append(opts.afloutdir)
+
+    # Upload and FuzzManager modes require specifying the AFL directory
+    assert not (opts.s3_queue_upload or opts.fuzzmanager) or opts.afloutdir
+
+    if opts.fuzzmanager or opts.s3_queue_upload or opts.aflstats:
+        last_queue_upload = 0
+
+        # If we reach this point, we know that AFL will be running on this machine,
+        # so do the local warning check
+        warn_local(opts)
+
+        while True:
+            if opts.fuzzmanager:
+                for afl_out_dir in afl_out_dirs:
+                    scan_crashes(
+                        afl_out_dir,
+                        collector,
+                        opts.custom_cmdline_file,
+                        opts.env_file,
+                        opts.test_file,
+                    )
+
+            # Only upload queue files every 20 minutes
+            if opts.s3_queue_upload and last_queue_upload < int(time.time()) - 1200:
+                for afl_out_dir in afl_out_dirs:
+                    s3m.upload_afl_queue_dir(afl_out_dir, new_cov_only=True)
+                last_queue_upload = int(time.time())
+
+            if opts.stats or opts.aflstats:
+                write_aggregated_stats_afl(
+                    afl_out_dirs,
+                    opts.aflstats,
+                    cmdline_path=opts.custom_cmdline_file,
+                )
+
+            time.sleep(10)
+
+    return 0

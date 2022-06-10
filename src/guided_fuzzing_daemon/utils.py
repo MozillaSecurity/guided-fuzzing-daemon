@@ -1,6 +1,8 @@
 import os
 import subprocess
+import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -86,6 +88,21 @@ def test_binary_asan(bin_path):
     ):
         return True
     return False
+
+
+def warn_local(opts):
+    if not opts.fuzzmanager and not opts.local:
+        # User didn't specify --fuzzmanager but also didn't specify --local
+        # explicitly, so we should warn them that their crash results won't end up
+        # anywhere except on the local machine. This method is called for AFL and
+        # libFuzzer separately whenever it is determined that the user is running
+        # fuzzing locally.
+        print(
+            "Warning: You are running in local mode, crashes won't be submitted "
+            "anywhere...",
+            file=sys.stderr,
+        )
+        time.sleep(2)
 
 
 def write_stats_file(outfile, fields, stats, warnings):
