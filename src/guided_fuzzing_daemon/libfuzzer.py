@@ -100,7 +100,7 @@ class LibFuzzerMonitor(threading.Thread):
                     self.inited = True
 
                 if line.find("Test unit written to ") >= 0:
-                    self.testcase = line.split()[-1]
+                    self.testcase = Path(line.split()[-1])
 
                 # libFuzzer sometimes hangs on out-of-memory. Kill it
                 # right away if we detect this situation.
@@ -119,13 +119,13 @@ class LibFuzzerMonitor(threading.Thread):
 
             self.process_stderr.close()
 
-            if self.hit_thread_limit and self.testcase and Path(self.testcase).exists():
+            if self.hit_thread_limit and self.testcase and self.testcase.exists():
                 # If we hit ASan's global thread limit, ignore the error and remove
                 # the resulting testcase, as it won't be useful anyway.
                 # Not that this thread limit is not a concurrent thread limit, but
                 # a limit imposed on the number of threads ever started during the
                 # lifetime of the process.
-                os.remove(self.testcase)
+                self.testcase.unlink()
                 self.testcase = None
         except Exception as exc:  # pylint: disable=broad-except
             self.exc = exc
@@ -268,8 +268,8 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
 
 def libfuzzer_main(opts, collector, s3m):
     assert opts.rargs
-    binary = opts.rargs[0]
-    if not os.path.exists(binary):
+    binary = Path(opts.rargs[0])
+    if not binary.exists():
         print(f"Error: Specified binary does not exist: {binary}", file=sys.stderr)
         return 2
 
@@ -355,7 +355,7 @@ def libfuzzer_main(opts, collector, s3m):
 
         # Set LD_LIBRARY_PATH for convenience
         if "LD_LIBRARY_PATH" not in env:
-            env["LD_LIBRARY_PATH"] = str(Path(binary).parent)
+            env["LD_LIBRARY_PATH"] = str(binary.parent)
 
     signature_repeat_count = 0
     last_signature = None
@@ -363,13 +363,14 @@ def libfuzzer_main(opts, collector, s3m):
     restarts = opts.libfuzzer_restarts
 
     # The base directory for libFuzzer is the current working directory
-    base_dir = os.getcwd()
+    base_dir = Path.cwd()
 
     # Find the first corpus directory from our command line
     corpus_dir = None
     for rarg in opts.rargs:
-        if os.path.isdir(rarg):
-            corpus_dir = os.path.abspath(rarg)
+        rarg_path = Path(rarg)
+        if rarg_path.is_dir():
+            corpus_dir = rarg_path.resolve()
             break
 
     if corpus_dir is None:
@@ -383,7 +384,7 @@ def libfuzzer_main(opts, collector, s3m):
     warn_local(opts)
 
     # Memorize the original corpus, so we can exclude it from uploading later
-    original_corpus = set(os.listdir(corpus_dir))
+    original_corpus = {item.name for item in corpus_dir.iterdir()}
 
     corpus_auto_reduce_threshold = None
     corpus_auto_reduce_ratio = None
@@ -412,7 +413,7 @@ def libfuzzer_main(opts, collector, s3m):
     with open("cmdline", "w") as cmdline_fd:
         for rarg in opts.rargs:
             # Omit any corpus directory that is in the command line
-            if not os.path.isdir(rarg):
+            if not Path(rarg).is_dir():
                 print(rarg, file=cmdline_fd)
 
     monitors = [None] * opts.libfuzzer_instances
@@ -478,7 +479,7 @@ def libfuzzer_main(opts, collector, s3m):
             if corpus_auto_reduce_threshold is not None or opts.stats:
                 # We need the corpus size for stats and the auto reduce feature,
                 # so we cache it here to avoid running listdir multiple times.
-                corpus_size = len(os.listdir(corpus_dir))
+                corpus_size = sum(1 for _ in corpus_dir.iterdir())
 
             if (
                 corpus_auto_reduce_threshold is not None
@@ -521,7 +522,7 @@ def libfuzzer_main(opts, collector, s3m):
                 merge_cmdline = [x for x in merge_cmdline if not x.startswith("-dict=")]
 
                 new_corpus_dir = tempfile.mkdtemp(prefix="fm-libfuzzer-automerge-")
-                merge_cmdline.extend(["-merge=1", new_corpus_dir, corpus_dir])
+                merge_cmdline.extend(["-merge=1", new_corpus_dir, str(corpus_dir)])
 
                 print("Running automated merge...", file=sys.stderr)
                 env = os.environ.copy()
@@ -531,15 +532,15 @@ def libfuzzer_main(opts, collector, s3m):
                     devnull = None
                 subprocess.run(merge_cmdline, stdout=devnull, env=env, check=True)
 
-                if not os.listdir(new_corpus_dir):
+                if not any(Path(new_corpus_dir).iterdir()):
                     print("Error: Merge returned empty result, refusing to continue.")
                     return 2
 
-                shutil.rmtree(corpus_dir)
-                shutil.move(new_corpus_dir, corpus_dir)
+                shutil.rmtree(str(corpus_dir))
+                shutil.move(new_corpus_dir, str(corpus_dir))
 
                 # Update our corpus size
-                corpus_size = len(os.listdir(corpus_dir))
+                corpus_size = sum(1 for _ in corpus_dir.iterdir())
 
                 # Update our auto-reduction target
                 if corpus_size >= opts.libfuzzer_auto_reduce_min:
@@ -569,10 +570,12 @@ def libfuzzer_main(opts, collector, s3m):
             if opts.s3_queue_upload and (
                 corpus_reduction_done or last_queue_upload < int(time.time()) - 7200
             ):
-                s3m.upload_libfuzzer_queue_dir(base_dir, corpus_dir, original_corpus)
+                s3m.upload_libfuzzer_queue_dir(
+                    str(base_dir), str(corpus_dir), original_corpus
+                )
 
                 # Pull down queue files from other queues directly into the corpus
-                s3m.download_libfuzzer_queues(corpus_dir)
+                s3m.download_libfuzzer_queues(str(corpus_dir))
 
                 last_queue_upload = int(time.time())
                 corpus_reduction_done = False
@@ -626,14 +629,14 @@ def libfuzzer_main(opts, collector, s3m):
 
             # Ignore slow units and oom files
             if testcase is not None:
-                testcase_name = Path(testcase).name
+                testcase_name = testcase.name
 
                 if not monitor.inited:
                     if testcase_name.startswith("oom-") or testcase_name.startswith(
                         "timeout-"
                     ):
                         hashname = testcase_name.split("-")[1]
-                        potential_corpus_file = Path(corpus_dir) / hashname
+                        potential_corpus_file = corpus_dir / hashname
                         if potential_corpus_file.exists():
                             print(
                                 f"Removing problematic corpus file {hashname}...",
@@ -701,7 +704,7 @@ def libfuzzer_main(opts, collector, s3m):
                 # to point to the archive which includes both, the original and
                 # updated testcases
                 try:
-                    testcase = apply_transform(opts.transform, testcase)
+                    testcase = Path(apply_transform(opts.transform, testcase))
                 except Exception as exc:  # pylint: disable=broad-except
                     print(exc.args[1], file=sys.stderr)
 

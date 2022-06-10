@@ -1,4 +1,3 @@
-import os
 import subprocess
 import sys
 import tempfile
@@ -31,20 +30,22 @@ def apply_transform(script_path, testcase_path):
 
     with tempfile.TemporaryDirectory() as output_path:
         try:
-            subprocess.run([script_path, testcase_path, output_path], check=True)
+            subprocess.run(
+                [str(script_path), str(testcase_path), output_path], check=True
+            )
         except subprocess.CalledProcessError as exc:
             raise Exception(
                 "Failed to apply post crash transformation.  Aborting..."
             ) from exc
 
-        if len(os.listdir(output_path)) == 0:
+        if not any(Path(output_path).iterdir()):
             raise Exception(
                 "Transformation script did not generate any files.  Aborting..."
             )
 
-        archive_path = testcase_path + ".zip"
+        archive_path = f"{testcase_path}.zip"
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.write(testcase_path, Path(testcase_path).name)
+            archive.write(str(testcase_path), Path(testcase_path).name)
             for file in Path(output_path).rglob("*.*"):
                 archive.write(str(file), arcname=file.relative_to(output_path))
 
@@ -78,7 +79,7 @@ def setup_firefox(bin_path, prefs_path, ext_paths, test_path):
 
 def test_binary_asan(bin_path):
     result = subprocess.run(
-        ["nm", "-g", bin_path],
+        ["nm", "-g", str(bin_path)],
         capture_output=True,
     )
 

@@ -20,7 +20,7 @@ import stat
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import mkstemp
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -89,19 +89,17 @@ class S3Manager:
                                 synchronization
         """
         upload_files = [
-            x
-            for x in os.listdir(corpus_dir)
-            if x not in original_corpus and x not in self.uploaded_files
+            x.name
+            for x in Path(corpus_dir).iterdir()
+            if x.name not in original_corpus and x.name not in self.uploaded_files
         ]
 
         # Memorize files selected for upload
         self.uploaded_files.update(upload_files)
 
-        cmdline_file = os.path.join(base_dir, "cmdline")
+        cmdline_file = Path(base_dir) / "cmdline"
 
-        return self.__upload_queue_files(
-            corpus_dir, upload_files, base_dir, cmdline_file
-        )
+        self.__upload_queue_files(corpus_dir, upload_files, base_dir, cmdline_file)
 
     def download_libfuzzer_queues(self, corpus_dir):
         """
@@ -133,19 +131,19 @@ class S3Manager:
                 # If the file is in a queue marked as closed, ignore it
                 continue
 
-            basename = os.path.basename(remote_key.name)
+            basename = PurePosixPath(remote_key.name).name
 
             if basename in self.downloaded_files or basename in self.uploaded_files:
                 # If we ever downloaded this file before, ignore it
                 continue
 
-            dest_file = os.path.join(corpus_dir, basename)
-            if os.path.exists(dest_file):
+            dest_file = Path(corpus_dir) / basename
+            if dest_file.exists():
                 # If the file already exists locally, ignore it
                 continue
 
             print(f"Syncing from queue {queue_name}: {filename}")
-            remote_key.get_contents_to_filename(dest_file)
+            remote_key.get_contents_to_filename(str(dest_file))
 
             self.downloaded_files.add(basename)
 
@@ -161,28 +159,29 @@ class S3Manager:
         @type new_cov_only: Boolean
         @param new_cov_only: Only upload files that have new coverage
         """
-        queue_dir = os.path.join(base_dir, "queue")
+        base_path = Path(base_dir)
+        queue_path = base_path / "queue"
         queue_files = []
 
-        for queue_file in os.listdir(queue_dir):
+        for queue_file in queue_path.iterdir():
             # Ignore all files that aren't crash results
-            if not queue_file.startswith("id:"):
+            if not queue_file.name.startswith("id:"):
                 continue
 
             # Only upload files that have new coverage if we aren't told
             # otherwise by the caller.
-            if new_cov_only and "+cov" not in queue_file:
+            if new_cov_only and "+cov" not in queue_file.name:
                 continue
 
             # Ignore files that have been obtained from other local queues
             # to avoid duplicate uploading
-            if ",sync:" in queue_file:
+            if ",sync:" in queue_file.name:
                 continue
 
-            queue_files.append(queue_file)
+            queue_files.append(queue_file.name)
 
-        cmdline_file = os.path.join(base_dir, "cmdline")
-        return self.__upload_queue_files(queue_dir, queue_files, base_dir, cmdline_file)
+        cmdline_file = base_path / "cmdline"
+        self.__upload_queue_files(queue_path, queue_files, base_path, cmdline_file)
 
     def download_queue_dirs(self, work_dir):
         """
@@ -195,10 +194,9 @@ class S3Manager:
         @type work_dir: String
         @param work_dir: Local work directory
         """
-        download_dir = os.path.join(work_dir, "queues")
-
-        if not os.path.exists(download_dir):
-            os.mkdir(download_dir)
+        work_path = Path(work_dir)
+        download_path = work_path / "queues"
+        download_path.mkdir(exist_ok=True)
 
         remote_keys = list(self.bucket.list(self.remote_path_queues))
 
@@ -236,18 +234,17 @@ class S3Manager:
                 continue
 
             # If we see a cmdline file, fetch it into the main work directory
-            if os.path.basename(remote_key.name) == "cmdline":
-                remote_key.get_contents_to_filename(os.path.join(work_dir, "cmdline"))
+            if PurePosixPath(remote_key.name).name == "cmdline":
+                remote_key.get_contents_to_filename(str(work_path / "cmdline"))
                 continue
 
-            tmp_file = os.path.join(download_dir, "tmp")
+            tmp_file = download_path / "tmp"
 
-            remote_key.get_contents_to_filename(tmp_file)
+            remote_key.get_contents_to_filename(str(tmp_file))
 
-            with open(tmp_file, "rb") as tmp_fd:
-                hash_name = hashlib.sha1(tmp_fd.read()).hexdigest()
+            hash_name = hashlib.sha1(tmp_file.read_bytes()).hexdigest()
 
-            os.rename(tmp_file, os.path.join(download_dir, hash_name))
+            tmp_file.rename(download_path / hash_name)
 
     def clean_queue_dirs(self):
         """
@@ -360,18 +357,18 @@ class S3Manager:
         @param project_name: Name of the project folder inside the S3 bucket
         """
         # Clear any previous builds
-        if os.path.exists(build_dir):
-            shutil.rmtree(build_dir)
+        build_path = Path(build_dir)
+        if build_path.exists():
+            shutil.rmtree(str(build_path))
+        build_path.mkdir()
 
-        os.mkdir(build_dir)
-
-        zip_dest = os.path.join(build_dir, self.zip_name)
+        zip_dest = build_path / self.zip_name
 
         remote_key = Key(self.bucket)
         remote_key.name = self.remote_path_build
-        remote_key.get_contents_to_filename(zip_dest)
+        remote_key.get_contents_to_filename(str(zip_dest))
 
-        subprocess.run(["unzip", zip_dest, "-d", build_dir], check=True)
+        subprocess.run(["unzip", str(zip_dest), "-d", str(build_path)], check=True)
 
     def upload_build(self, build_file):
         """
@@ -381,15 +378,15 @@ class S3Manager:
         @type build_file: String
         @param build_file: (ZIP) file containing the build that should be uploaded
         """
-
-        if not os.path.exists(build_file) or not os.path.isfile(build_file):
+        build_path = Path(build_file)
+        if not build_path.exists() or not build_path.is_file():
             print("Error: Build must be a (zip) file.", file=sys.stderr)
             return
 
         remote_key = Key(self.bucket)
         remote_key.name = self.remote_path_build
         print(f"Uploading file {build_file} -> {remote_key.name}")
-        remote_key.set_contents_from_filename(build_file)
+        remote_key.set_contents_from_filename(str(build_path))
 
     def download_corpus(self, corpus_dir, random_subset_size=None):
         """
@@ -403,8 +400,8 @@ class S3Manager:
         @param random_subset_size: If specified, only download a random subset of
                                    the corpus, with the specified size.
         """
-        if not os.path.exists(corpus_dir):
-            os.mkdir(corpus_dir)
+        corpus_path = Path(corpus_dir)
+        corpus_path.mkdir(exist_ok=True)
 
         if not random_subset_size:
             # If we are not instructed to download only a sample of the corpus,
@@ -439,10 +436,10 @@ class S3Manager:
             remote_keys = random.sample(remote_keys, random_subset_size)
 
         for remote_key in remote_keys:
-            dest_file = os.path.join(corpus_dir, os.path.basename(remote_key.name))
+            dest_file = corpus_dir / PurePosixPath(remote_key.name).name
 
-            if not os.path.exists(dest_file):
-                remote_key.get_contents_to_filename(dest_file)
+            if not dest_file.exists():
+                remote_key.get_contents_to_filename(str(dest_file))
 
     def upload_corpus(self, corpus_dir, corpus_delete=False):
         """
@@ -455,11 +452,7 @@ class S3Manager:
         @type corpus_delete: bool
         @param corpus_delete: Delete all remote files that don't exist on our side
         """
-        test_files = [
-            file
-            for file in os.listdir(corpus_dir)
-            if os.path.isfile(os.path.join(corpus_dir, file))
-        ]
+        test_files = [file for file in Path(corpus_dir).iterdir() if file.is_file()]
 
         if not test_files:
             print("Error: Corpus is empty, refusing upload.", file=sys.stderr)
@@ -470,7 +463,7 @@ class S3Manager:
         os.close(zip_fd)
         with ZipFile(zip_dest, "w", ZIP_DEFLATED) as zip_file:
             for test_file in test_files:
-                zip_file.write(os.path.join(corpus_dir, test_file), arcname=test_file)
+                zip_file.write(str(test_file), arcname=test_file.name)
         remote_key = Key(self.bucket)
         remote_key.name = self.remote_path_corpus_bundle
         print(f"Uploading file {zip_dest} -> {remote_key.name}")
@@ -487,19 +480,19 @@ class S3Manager:
         delete_list = []
 
         for test_file in test_files:
-            if test_file not in remote_files:
-                upload_list.append(os.path.join(corpus_dir, test_file))
+            if test_file.name not in remote_files:
+                upload_list.append(test_file)
 
         if corpus_delete:
             for remote_file in remote_files:
-                if remote_file not in test_files:
+                if (Path(corpus_dir) / remote_file) not in test_files:
                     delete_list.append(remote_path + remote_file)
 
         for upload_file in upload_list:
             remote_key = Key(self.bucket)
-            remote_key.name = remote_path + os.path.basename(upload_file)
+            remote_key.name = remote_path + upload_file.name
             print(f"Uploading file {upload_file} -> {remote_key.name}")
-            remote_key.set_contents_from_filename(upload_file)
+            remote_key.set_contents_from_filename(str(upload_file))
 
         if corpus_delete:
             self.bucket.delete_keys(delete_list, quiet=True)
@@ -521,21 +514,19 @@ class S3Manager:
         @rtype: String
         @return: The generated/cached machine ID
         """
-        id_file = os.path.join(base_dir, "s3_id")
+        id_file = Path(base_dir) / "s3_id"
 
         # We initially create a unique ID based on the hostname and the
         # current timestamp, then we store this ID in a file inside the
         # fuzzing working directory so we can retrieve it later.
-        if refresh or not os.path.exists(id_file):
+        if refresh or not id_file.exists():
             hasher = hashlib.new("sha1")
             hasher.update(platform.node().encode("utf-8"))
             hasher.update(str(time.time()).encode("utf-8"))
             digest = hasher.hexdigest()
-            with open(id_file, "w") as id_fd:
-                id_fd.write(digest)
+            id_file.write_text(digest)
             return digest
-        with open(id_file) as id_fd:
-            return id_fd.read()
+        return id_file.read_text()
 
     def __upload_queue_files(self, queue_basedir, queue_files, base_dir, cmdline_file):
         machine_id = self.__get_machine_id(base_dir)
@@ -560,17 +551,17 @@ class S3Manager:
 
         for queue_file in queue_files:
             if queue_file not in remote_files:
-                upload_list.append(os.path.join(queue_basedir, queue_file))
+                upload_list.append(Path(queue_basedir) / queue_file)
 
         if "cmdline" not in remote_files:
-            upload_list.append(cmdline_file)
+            upload_list.append(Path(cmdline_file))
 
         for upload_file in upload_list:
             remote_key = Key(self.bucket)
-            remote_key.name = remote_path + os.path.basename(upload_file)
+            remote_key.name = remote_path + upload_file.name
             print(f"Uploading file {upload_file} -> {remote_key.name}")
             try:
-                remote_key.set_contents_from_filename(upload_file)
+                remote_key.set_contents_from_filename(str(upload_file))
             except OSError:
                 # Newer libFuzzer can delete files from the corpus if it finds a shorter
                 # version in the same run.
@@ -592,10 +583,11 @@ def s3_main(opts):
         s3m.download_corpus(opts.s3_corpus_download, opts.s3_corpus_download_size)
 
     elif opts.s3_corpus_refresh:
-        if not os.path.exists(opts.s3_corpus_refresh):
-            os.makedirs(opts.s3_corpus_refresh)
+        corpus_path = Path(opts.s3_corpus_refresh)
 
-        queues_dir = os.path.join(opts.s3_corpus_refresh, "queues")
+        corpus_path.mkdir(parents=True, exist_ok=True)
+
+        queues_dir = corpus_path / "queues"
 
         print(f"Cleaning old queues from s3://{opts.s3_bucket}/{opts.project}/queues/")
         s3m.clean_queue_dirs()
@@ -606,8 +598,8 @@ def s3_main(opts):
         )
         s3m.download_queue_dirs(opts.s3_corpus_refresh)
 
-        cmdline_file = os.path.join(opts.s3_corpus_refresh, "cmdline")
-        if not os.path.exists(cmdline_file):
+        cmdline_file = corpus_path / "cmdline"
+        if not cmdline_file.exists():
             # this can happen in a few legitimate cases:
             #  - project folder does not exist at all (new project)
             #  - only closed queues existed (old project)
@@ -619,28 +611,25 @@ def s3_main(opts):
             )
             return 0
 
-        build_path = os.path.join(opts.s3_corpus_refresh, "build")
-
         if opts.build:
-            build_path = opts.build
+            build_path = Path(opts.build)
         else:
             print("Downloading build")
-            s3m.download_build(build_path)
+            build_path = corpus_path / "build"
+            s3m.download_build(str(build_path))
 
-        cmdline = (Path(opts.s3_corpus_refresh) / "cmdline").read_text().splitlines()
+        cmdline = (corpus_path / "cmdline").read_text().splitlines()
 
         # Assume cmdline[0] is the name of the binary
         binary_name = Path(cmdline[0]).name
 
         # Try locating our binary in the build we just unpacked
         binary_search_result = [
-            os.path.join(dirpath, filename)
-            for dirpath, dirnames, filenames in os.walk(build_path)
-            for filename in filenames
-            if (
-                filename == binary_name
-                and (stat.S_IXUSR & (Path(dirpath) / filename).stat().st_mode)
-            )
+            file
+            for file in build_path.glob("**/*")
+            if file.is_file()
+            and file.name == binary_name
+            and (stat.S_IXUSR & file.stat().st_mode)
         ]
 
         if not binary_search_result:
@@ -667,17 +656,17 @@ def s3_main(opts):
         s3m.download_corpus(queues_dir)
 
         # Ensure the directory for our new tests is empty
-        updated_tests_dir = os.path.join(opts.s3_corpus_refresh, "tests")
-        if os.path.exists(updated_tests_dir):
-            shutil.rmtree(updated_tests_dir)
-        os.mkdir(updated_tests_dir)
+        updated_tests_dir = corpus_path / "tests"
+        if updated_tests_dir.exists():
+            shutil.rmtree(str(updated_tests_dir))
+        updated_tests_dir.mkdir()
 
         if opts.mode == "aflfuzz":
             assert opts.aflbindir
 
             # Run afl-cmin
-            afl_cmin = os.path.join(opts.aflbindir, "afl-cmin")
-            if not os.path.exists(afl_cmin):
+            afl_cmin = Path(opts.aflbindir) / "afl-cmin"
+            if not afl_cmin.exists():
                 print("Error: Unable to locate afl-cmin binary.", file=sys.stderr)
                 return 2
 
@@ -691,12 +680,12 @@ def s3_main(opts):
                 cmdline = ff_cmd
 
             afl_cmdline = [
-                afl_cmin,
+                str(afl_cmin),
                 "-e",
                 "-i",
-                queues_dir,
+                str(queues_dir),
                 "-o",
-                updated_tests_dir,
+                str(updated_tests_dir),
                 "-t",
                 str(opts.afl_timeout),
                 "-m",
@@ -721,7 +710,7 @@ def s3_main(opts):
             if opts.firefox:
                 ffp.clean_up()
         else:
-            cmdline.extend(["-merge=1", updated_tests_dir, queues_dir])
+            cmdline.extend(["-merge=1", str(updated_tests_dir), str(queues_dir)])
 
             # Filter out any -dict arguments that we don't need anyway for merging
             cmdline = [x for x in cmdline if not x.startswith("-dict=")]
@@ -738,7 +727,7 @@ def s3_main(opts):
                 devnull = None
             subprocess.run(cmdline, stdout=devnull, env=env, check=True)
 
-        if not os.listdir(updated_tests_dir):
+        if not any(updated_tests_dir.iterdir()):
             print(
                 "Error: Merge returned empty result, refusing to upload.",
                 file=sys.stderr,
@@ -749,24 +738,22 @@ def s3_main(opts):
         print(
             f"Uploading reduced corpus to s3://{opts.s3_bucket}/{opts.project}/corpus/"
         )
-        s3m.upload_corpus(updated_tests_dir, corpus_delete=True)
+        s3m.upload_corpus(str(updated_tests_dir), corpus_delete=True)
 
         # Prune the queues directory once we successfully uploaded the new
         # test corpus, but leave everything that's part of our new corpus
         # so we don't have to download those files again.
         test_files = [
-            file
-            for file in os.listdir(updated_tests_dir)
-            if os.path.isfile(os.path.join(updated_tests_dir, file))
+            file.name for file in updated_tests_dir.iterdir() if file.is_file()
         ]
         obsolete_queue_files = [
-            file
-            for file in os.listdir(queues_dir)
-            if os.path.isfile(os.path.join(queues_dir, file)) and file not in test_files
+            file.name
+            for file in queues_dir.iterdir()
+            if file.is_file() and file.name not in test_files
         ]
 
         for file in obsolete_queue_files:
-            os.remove(os.path.join(queues_dir, file))
+            (queues_dir / file).unlink()
 
     elif opts.s3_corpus_status:
         status_data = s3m.get_corpus_status()

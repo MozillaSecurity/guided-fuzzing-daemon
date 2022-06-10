@@ -1,4 +1,3 @@
-import os.path
 import shutil
 import subprocess
 import sys
@@ -77,27 +76,25 @@ def scan_crashes(
     @rtype: int
     @return: Non-zero return code on failure
     """
-    crash_dir = os.path.join(base_dir, "crashes")
+    crash_dir = Path(base_dir) / "crashes"
     crash_files = []
 
-    for crash_file in os.listdir(crash_dir):
+    for crash_path in crash_dir.iterdir():
         # Ignore all files that aren't crash results
-        if not crash_file.startswith("id:"):
+        if not crash_path.name.startswith("id:"):
             continue
 
-        crash_file = os.path.join(crash_dir, crash_file)
-
         # Ignore our own status files
-        if crash_file.endswith(".submitted") or crash_file.endswith(".failed"):
+        if crash_path.suffix in {".submitted", ".failed"}:
             continue
 
         # Ignore files we already processed
-        if os.path.exists(crash_file + ".submitted") or os.path.exists(
-            crash_file + ".failed"
-        ):
+        if (crash_dir / f"{crash_path.name}.submitted").exists() or (
+            crash_dir / f"{crash_path.name}.failed"
+        ).exists():
             continue
 
-        crash_files.append(crash_file)
+        crash_files.append(crash_path)
 
     if crash_files:
         # First try to read necessary information for reproducing crashes
@@ -114,7 +111,7 @@ def scan_crashes(
                         test_in_env = name
 
         if not cmdline_path:
-            cmdline_path = os.path.join(base_dir, "cmdline")
+            cmdline_path = Path(base_dir) / "cmdline"
 
         test_idx, cmdline = command_file_to_list(cmdline_path)
         if test_idx is not None:
@@ -144,19 +141,18 @@ def scan_crashes(
             submission = crash_file
             if transform:
                 try:
-                    submission = apply_transform(transform, crash_file)
+                    submission = Path(apply_transform(transform, crash_file))
                 except Exception as exc:  # pylint: disable=broad-except
                     print(exc.args[1], file=sys.stderr)
 
             if test_idx is not None:
-                cmdline[test_idx] = orig_test_arg.replace("@@", crash_file)
+                cmdline[test_idx] = orig_test_arg.replace("@@", str(crash_file))
             elif test_in_env is not None:
-                env[test_in_env] = env[test_in_env].replace("@@", crash_file)
+                env[test_in_env] = env[test_in_env].replace("@@", str(crash_file))
             elif test_path is not None:
-                shutil.copy(crash_file, test_path)
+                shutil.copy(str(crash_file), test_path)
             else:
-                with open(crash_file) as crash_fd:
-                    stdin = crash_fd.read()
+                stdin = crash_file.read_text()
 
             print(f"Processing crash file {crash_file}", file=sys.stderr)
 
@@ -166,10 +162,10 @@ def scan_crashes(
             if runner.run():
                 crash_info = runner.getCrashInfo(configuration)
                 collector.submit(crash_info, submission)
-                Path(submission + ".submitted").touch()
+                (submission.parent / f"{submission.name}.submitted").touch()
                 print("Success: Submitted crash to server.", file=sys.stderr)
             else:
-                Path(submission + ".failed").touch()
+                (submission.parent / f"{submission.name}.failed").touch()
                 print(
                     "Error: Failed to reproduce the given crash, cannot submit.",
                     file=sys.stderr,
@@ -242,14 +238,13 @@ def write_aggregated_stats_afl(base_dirs, outfile, cmdline_path=None):
         return int(num)
 
     for base_dir in base_dirs:
-        stats_path = os.path.join(base_dir, "fuzzer_stats")
+        stats_path = Path(base_dir) / "fuzzer_stats"
 
         if not cmdline_path:
-            cmdline_path = os.path.join(base_dir, "cmdline")
+            cmdline_path = Path(base_dir) / "cmdline"
 
-        if os.path.exists(stats_path):
-            with open(stats_path) as stats_file:
-                stats = stats_file.read()
+        if stats_path.exists():
+            stats = stats_path.read_text()
 
             for line in stats.splitlines():
                 (field_name, field_val) = line.split(":", 1)
@@ -291,7 +286,7 @@ def write_aggregated_stats_afl(base_dirs, outfile, cmdline_path=None):
     target_binary = cmdline[0] if cmdline else None
 
     if target_binary is not None:
-        if not os.path.isfile(f"{target_binary}.fuzzmanagerconf"):
+        if not Path(f"{target_binary}.fuzzmanagerconf").is_file():
             warnings.append(f"WARNING: Missing {target_binary}.fuzzmanagerconf\n")
         elif ProgramConfiguration.fromBinary(target_binary) is None:
             warnings.append(f"WARNING: Invalid {target_binary}.fuzzmanagerconf\n")
@@ -299,11 +294,11 @@ def write_aggregated_stats_afl(base_dirs, outfile, cmdline_path=None):
     # Look for unreported crashes
     failed_reports = 0
     for base_dir in base_dirs:
-        crashes_dir = os.path.join(base_dir, "crashes")
-        if not os.path.isdir(crashes_dir):
+        crashes_dir = Path(base_dir) / "crashes"
+        if not crashes_dir.is_dir():
             continue
-        for crash_file in os.listdir(crashes_dir):
-            if crash_file.endswith(".failed"):
+        for crash_file in crashes_dir.iterdir():
+            if crash_file.suffix == ".failed":
                 failed_reports += 1
     if failed_reports:
         warnings.append(f"WARNING: Unreported crashes detected ({failed_reports})\n")
@@ -351,11 +346,9 @@ def aflfuzz_main(opts, collector, s3m):
             # The specified directory doesn't have a "crashes" sub directory.
             # Either the wrong directory was specified, or this is an AFL
             # multi-process synchronization directory. Try to figure this out here.
-            sync_dirs = os.listdir(opts.afloutdir)
-
-            for sync_dir in sync_dirs:
-                if (Path(opts.afloutdir) / sync_dir / "crashes").exists():
-                    afl_out_dirs.append(os.path.join(opts.afloutdir, sync_dir))
+            for sync_dir in Path(opts.afloutdir).iterdir():
+                if (sync_dir / "crashes").exists():
+                    afl_out_dirs.append(str(sync_dir))
 
             if not afl_out_dirs:
                 print(
