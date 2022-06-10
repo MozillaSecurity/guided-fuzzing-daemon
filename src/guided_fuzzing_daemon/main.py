@@ -19,6 +19,7 @@ from Collector.Collector import Collector
 from .afl import aflfuzz_main
 from .args import parse_args
 from .libfuzzer import libfuzzer_main
+from .nyx import nyx_main
 from .s3 import S3Manager, s3_main
 
 
@@ -70,6 +71,9 @@ def main(argv=None):
 
     if opts.mode == "aflfuzz":
         return aflfuzz_main(opts, collector, s3m)
+
+    if opts.mode == "nyx":
+        return nyx_main(opts, collector, s3m)
 
     print("Error: Unhandled case", file=sys.stderr)
     return 2

@@ -15,7 +15,7 @@ def parse_args(argv=None):
     # setup argparser
     parser = argparse.ArgumentParser(
         usage=(
-            f"{program_name} --libfuzzer or --aflfuzz [OPTIONS] "
+            f"{program_name} --libfuzzer or --nyx or --aflfuzz [OPTIONS] "
             "--cmd <COMMAND AND ARGUMENTS>"
         )
     )
@@ -26,6 +26,9 @@ def parse_args(argv=None):
     )
     libf_group = parser.add_argument_group(
         title="Libfuzzer Options", description="Use these arguments in Libfuzzer mode."
+    )
+    nyx_group = parser.add_argument_group(
+        title="Nyx Options", description="Use these arguments in Nyx mode."
     )
     fm_group = parser.add_argument_group(
         title="FuzzManager Options",
@@ -66,6 +69,13 @@ def parse_args(argv=None):
         const="aflfuzz",
         dest="mode",
         help="Enable AFL mode",
+    )
+    mode_group.add_argument(
+        "--nyx",
+        action="store_const",
+        const="nyx",
+        dest="mode",
+        help="Enable Nyx mode",
     )
     main_group.add_argument(
         "--debug",
@@ -209,6 +219,19 @@ def parse_args(argv=None):
         default=1000,
         help="Minimum corpus size for auto-reduce to apply.",
         metavar="COUNT",
+    )
+
+    nyx_group.add_argument(
+        "--sharedir",
+        help="Path to Nyx 'sharedir'",
+        type=Path,
+        metavar="DIR",
+    )
+    nyx_group.add_argument(
+        "--spec-fuzzer",
+        help="Path to Spec-Fuzzer repository",
+        type=Path,
+        metavar="DIR",
     )
 
     fm_group.add_argument(
@@ -384,6 +407,13 @@ def parse_args(argv=None):
             parser.error(
                 "Error: Must specify --afl-binary-dir for refreshing the test corpus"
             )
+
+    if opts.mode == "nyx":
+        if not opts.spec_fuzzer or not opts.spec_fuzzer.is_dir():
+            parser.error("Error: Must specify --spec-fuzzer with --nyx")
+
+        if not opts.sharedir or not opts.sharedir.is_dir():
+            parser.error("Error: Must specify --sharedir with --nyx")
 
     if opts.mode == "libfuzzer":
         if not opts.rargs:
