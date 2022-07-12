@@ -233,6 +233,12 @@ def parse_args(argv=None):
         type=Path,
         metavar="DIR",
     )
+    nyx_group.add_argument(
+        "--workdir",
+        help="Path to Nyx workdir",
+        type=Path,
+        metavar="DIR",
+    )
 
     fm_group.add_argument(
         "--custom-cmdline-file",
@@ -414,6 +420,9 @@ def parse_args(argv=None):
 
         if not opts.sharedir or not opts.sharedir.is_dir():
             parser.error("Error: Must specify --sharedir with --nyx")
+
+        if not opts.workdir or not opts.workdir.is_dir():
+            parser.error("Error: Must specify --workdir with --nyx")
 
     if opts.mode == "libfuzzer":
         if not opts.rargs:

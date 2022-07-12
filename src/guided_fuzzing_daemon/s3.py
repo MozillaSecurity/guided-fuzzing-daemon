@@ -16,6 +16,7 @@ import os
 import platform
 import random
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -71,6 +72,37 @@ class S3Manager:
         # merge.
         self.uploaded_files = set()
         self.downloaded_files = set()
+
+    def upload_nyx_queue_dir(self, workdir):
+        """
+        Synchronize the corpus directory of the specified Nyx corpus directory
+        to the specified S3 bucket. This method only uploads files that don't
+        exist yet on the receiving side and excludes all files in the original corpus.
+
+        @type base_dir: String
+        @param base_dir: libFuzzer base directory
+
+        @type corpus_dir: String
+        @param corpus_dir: libFuzzer corpus directory
+
+        @type original_corpus: Set
+        @param original_corpus: Set of original corpus files to exclude from
+                                synchronization
+        """
+        uploads = {}
+        corpus_dir = Path(workdir) / "corpus" / "normal"
+        for file in corpus_dir.glob("*.bin"):
+            file_hash = hashlib.sha1(file.read_bytes()).hexdigest()
+            if file_hash not in self.uploaded_files:
+                uploads[file.name] = file_hash
+
+        # Memorize files selected for upload
+        self.uploaded_files.update(uploads.values())
+
+        self.__upload_queue_files(corpus_dir, uploads, workdir, use_hash_filename=True)
+
+    def download_nyx_queues(self, workdir):
+        self.download_libfuzzer_queues(str(workdir / "imports"))
 
     def upload_libfuzzer_queue_dir(self, base_dir, corpus_dir, original_corpus):
         """
@@ -528,7 +560,14 @@ class S3Manager:
             return digest
         return id_file.read_text()
 
-    def __upload_queue_files(self, queue_basedir, queue_files, base_dir, cmdline_file):
+    def __upload_queue_files(
+        self,
+        queue_basedir,
+        queue_files,
+        base_dir,
+        cmdline_file=None,
+        use_hash_filename=False,
+    ):
         machine_id = self.__get_machine_id(base_dir)
         remote_path = f"{self.remote_path_queues}{machine_id}/"
         remote_files = [
@@ -553,12 +592,17 @@ class S3Manager:
             if queue_file not in remote_files:
                 upload_list.append(Path(queue_basedir) / queue_file)
 
-        if "cmdline" not in remote_files:
+        if "cmdline" not in remote_files and cmdline_file is not None:
             upload_list.append(Path(cmdline_file))
 
         for upload_file in upload_list:
             remote_key = Key(self.bucket)
-            remote_key.name = remote_path + upload_file.name
+            if use_hash_filename:
+                remote_key.name = (
+                    remote_path + hashlib.sha1(upload_file.read_bytes()).hexdigest()
+                )
+            else:
+                remote_key.name = remote_path + upload_file.name
             print(f"Uploading file {upload_file} -> {remote_key.name}")
             try:
                 remote_key.set_contents_from_filename(str(upload_file))
@@ -709,7 +753,7 @@ def s3_main(opts):
 
             if opts.firefox:
                 ffp.clean_up()
-        else:
+        elif opts.mode == "libfuzzer":
             cmdline.extend(["-merge=1", str(updated_tests_dir), str(queues_dir)])
 
             # Filter out any -dict arguments that we don't need anyway for merging
@@ -726,6 +770,46 @@ def s3_main(opts):
             if opts.debug:
                 devnull = None
             subprocess.run(cmdline, stdout=devnull, env=env, check=True)
+        elif opts.mode == "nyx":
+            assert opts.sharedir
+            assert opts.spec_fuzzer
+            assert opts.workdir
+
+            devnull = subprocess.DEVNULL
+            if opts.debug:
+                devnull = None
+            with subprocess.Popen(cmdline, stdout=devnull) as proc:
+                print("waiting until Nyx is up", file=sys.stderr)
+                time.sleep(10)  # delay until workdir has been created
+                imports = opts.workdir / "imports"
+                if not imports.is_dir():
+                    proc.terminate()
+                    raise Exception(f"can't find imports/ in workdir '{opts.workdir}'")
+                print("copying queue to imports", file=sys.stderr)
+                for file in queues_dir.iterdir():
+                    shutil.copy(file, imports)
+                # wait for imports to be empty
+                print("waiting for Nyx to process imports", file=sys.stderr)
+                while proc.poll() is None:
+                    if not any(imports.iterdir()):
+                        print("import complete", file=sys.stderr)
+                        break
+                    time.sleep(1)
+                if proc.poll() is not None:
+                    raise Exception("Nyx exited before imports were completed")
+                time.sleep(1)
+                print("sending SIGINT to Nyx", file=sys.stderr)
+                proc.send_signal(signal.SIGINT)
+                proc.wait()
+                print("done", file=sys.stderr)
+                print("copying corpus to output", file=sys.stderr)
+                for file in (opts.workdir / "corpus" / "normal").glob("*.bin"):
+                    shutil.copy(file, updated_tests_dir)
+                print("done", file=sys.stderr)
+        else:
+            raise NotImplementedError(
+                f"--s3-corpus-refresh no implemented yet for mode {opts.mode}"
+            )
 
         if not any(updated_tests_dir.iterdir()):
             print(
