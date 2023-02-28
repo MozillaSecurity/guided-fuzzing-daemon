@@ -34,12 +34,12 @@ def apply_transform(script_path, testcase_path):
                 [str(script_path), str(testcase_path), output_path], check=True
             )
         except subprocess.CalledProcessError as exc:
-            raise Exception(
+            raise RuntimeError(
                 "Failed to apply post crash transformation.  Aborting..."
             ) from exc
 
         if not any(Path(output_path).iterdir()):
-            raise Exception(
+            raise RuntimeError(
                 "Transformation script did not generate any files.  Aborting..."
             )
 
@@ -125,7 +125,9 @@ def write_stats_file(outfile, fields, stats, warnings):
 
     max_keylen = max(len(x) for x in fields)
 
-    with InterProcessLock(outfile + ".lock"), open(outfile, "w") as out_fp:
+    with InterProcessLock(outfile + ".lock"), open(
+        outfile, "w", encoding="utf-8"
+    ) as out_fp:
         for field in fields:
             if field not in stats:
                 continue

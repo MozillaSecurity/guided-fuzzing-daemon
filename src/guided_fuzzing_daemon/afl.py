@@ -30,7 +30,7 @@ def command_file_to_list(cmd_file):
     cmdline = []
     idx = 0
     test_idx = None
-    with open(cmd_file) as cmd_fp:
+    with open(cmd_file, encoding="utf-8") as cmd_fp:
         for line in cmd_fp:
             if "@@" in line:
                 test_idx = idx
@@ -102,7 +102,7 @@ def scan_crashes(
         base_env = {}
         test_in_env = None
         if env_path:
-            with open(env_path) as env_file:
+            with open(env_path, encoding="utf-8") as env_file:
                 for line in env_file:
                     (name, val) = line.rstrip("\n").split("=", 1)
                     base_env[name] = val
@@ -119,7 +119,7 @@ def scan_crashes(
 
         configuration = ProgramConfiguration.fromBinary(cmdline[0])
         if not configuration:
-            raise Exception(
+            raise RuntimeError(
                 "Creating program configuration from binary failed. "
                 "Check your binary configuration file."
             )

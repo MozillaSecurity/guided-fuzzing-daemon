@@ -312,7 +312,7 @@ def libfuzzer_main(opts, collector, s3m):
     for arg in cmdline:
         if arg.startswith("-jobs=") or arg.startswith("-workers="):
             print(
-                "Error: Using -jobs and -workers is incompatible with this " "wrapper.",
+                "Error: Using -jobs and -workers is incompatible with this wrapper.",
                 file=sys.stderr,
             )
             print(
@@ -410,7 +410,7 @@ def libfuzzer_main(opts, collector, s3m):
             return 2
 
     # Write a cmdline file, similar to what our AFL fork does
-    with open("cmdline", "w") as cmdline_fd:
+    with open("cmdline", "w", encoding="utf-8") as cmdline_fd:
         for rarg in opts.rargs:
             # Omit any corpus directory that is in the command line
             if not Path(rarg).is_dir():

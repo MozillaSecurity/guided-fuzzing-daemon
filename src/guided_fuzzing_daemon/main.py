@@ -47,7 +47,9 @@ def main(argv=None):
     if opts.fuzzmanager:
         serverauthtoken = None
         if opts.serverauthtokenfile:
-            serverauthtoken = Path(opts.serverauthtokenfile).read_text().rstrip()
+            serverauthtoken = (
+                Path(opts.serverauthtokenfile).read_text(encoding="utf-8").rstrip()
+            )
 
         collector = Collector(
             sigCacheDir=opts.sigdir,
