@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 from FTB.ProgramConfiguration import ProgramConfiguration
@@ -223,6 +224,10 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
     # Only supported for total and max aggregation.
     wanted_fields_global_aggr = ["execs_done", "last_new", "last_new_pc"]
 
+    # These fields should already be defined above, and will be converted
+    # from unix timestamp to ISO8601 format before being written.
+    wanted_fields_conv_time = ["last_new", "last_new_pc"]
+
     # Generate total list of fields to write
     fields = []
     fields.extend(wanted_fields_total)
@@ -279,6 +284,13 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
             # Write aggregated stats back into the global stats for max fields
             if field in wanted_fields_max:
                 stats[field] = aggregated_stats[field]
+
+        for field in wanted_fields_conv_time:
+            aggregated_stats[field] = (
+                datetime.fromtimestamp(aggregated_stats[field], tz=timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
 
     # Write out data
     write_stats_file(outfile, fields, aggregated_stats, warnings)
