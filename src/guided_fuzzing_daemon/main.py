@@ -44,6 +44,7 @@ def main(argv=None):
 
     # ## End generic S3 action handling ##
 
+    collector = None
     if opts.fuzzmanager:
         serverauthtoken = None
         if opts.serverauthtokenfile:
