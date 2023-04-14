@@ -19,10 +19,13 @@ from FTB.Signatures.CrashInfo import CrashInfo
 
 from .utils import apply_transform, test_binary_asan, warn_local, write_stats_file
 
-RE_LIBFUZZER_STATUS = re.compile(r"\s*#(\d+)\s+(INITED|NEW|RELOAD|REDUCE|pulse)\s+cov:")
+RE_LIBFUZZER_STATUS = re.compile(
+    r"\s*#(\d+)\s+(INITED|NEW|RELOAD|REDUCE|pulse)\s+cov: (\d+)"
+)
 RE_LIBFUZZER_NEWPC = re.compile(r"\s+NEW_PC:\s+0x")
-RE_LIBFUZZER_EXECS = re.compile(r"\s+exec/s: (\d+)\s+")
+RE_LIBFUZZER_EXECS = re.compile(r"\s+exec/s: (\d+)")
 RE_LIBFUZZER_RSS = re.compile(r"\s+rss: (\d+)Mb")
+RE_LIBFUZZER_FEAT = re.compile(r"\s+ft: (\d+)")
 
 # Used to set initialized to true, as the INITED message is not present with an empty
 # corpus
@@ -47,6 +50,8 @@ class LibFuzzerMonitor(threading.Thread):
         self.mqueue = mqueue
 
         # Keep some statistics
+        self.cov = 0
+        self.feat = 0
         self.execs_done = 0
         self.execs_per_sec = 0
         self.rss_mb = 0
@@ -69,28 +74,36 @@ class LibFuzzerMonitor(threading.Thread):
 
                 status_match = RE_LIBFUZZER_STATUS.search(line)
 
-                if status_match:
+                if status_match is not None:
                     self.execs_done = int(status_match.group(1))
+                    self.cov = int(status_match.group(3))
 
                     if status_match.group(2) == "NEW":
                         self.last_new = int(time.time())
 
                     exec_match = RE_LIBFUZZER_EXECS.search(line)
                     rss_match = RE_LIBFUZZER_RSS.search(line)
+                    feat_match = RE_LIBFUZZER_FEAT.search(line)
 
-                    if exec_match:
+                    if exec_match is not None:
                         self.execs_per_sec = int(exec_match.group(1))
-                    if rss_match:
+                    if rss_match is not None:
                         self.rss_mb = int(rss_match.group(1))
-                elif RE_LIBFUZZER_NEWPC.search(line):
+                    if feat_match is not None:
+                        self.feat = int(feat_match.group(1))
+
+                elif RE_LIBFUZZER_NEWPC.search(line) is not None:
                     self.last_new_pc = int(time.time())
+
                 elif self.in_trace:
                     self.trace.append(line.rstrip())
                     if line.find("==ABORTING") >= 0:
                         self.in_trace = False
+
                 elif line.find("==ERROR: AddressSanitizer") >= 0:
                     self.trace.append(line.rstrip())
                     self.in_trace = True
+
                 elif line.find("==AddressSanitizer: Thread limit") >= 0:
                     self.hit_thread_limit = True
 
@@ -184,6 +197,8 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
 
     # Which fields to add
     wanted_fields_total = [
+        "cov",
+        "feat",
         "execs_done",
         "execs_per_sec",
         "rss_mb",
@@ -428,6 +443,8 @@ def libfuzzer_main(opts, collector, s3m):
 
     # Global stats
     stats = {
+        "cov": 0,
+        "feat": 0,
         "crashes": 0,
         "crashes_per_minute": 0,
         "timeouts": 0,
