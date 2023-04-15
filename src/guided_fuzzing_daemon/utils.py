@@ -8,13 +8,20 @@ import time
 import zipfile
 from pathlib import Path
 
+try:
+    from os import getloadavg
+except ImportError:  # pragma: no cover
+    # os.getloadavg() is not available on all platforms
+    getloadavg = None
 from fasteners import InterProcessLock
+from psutil import cpu_count, cpu_percent, disk_usage, virtual_memory
 
 HAVE_FFPUPPET = True
 try:
     from ffpuppet import FFPuppet
 except ImportError:
     HAVE_FFPUPPET = False
+CPU_POLL_INTERVAL = 1
 
 
 def apply_transform(script_path, testcase_path):
@@ -80,6 +87,54 @@ def setup_firefox(bin_path, prefs_path, ext_paths, test_path):
     return (ffp, cmd, env)
 
 
+# this function copied almost wholesale from grizzly.common.status_reporter
+def sys_info():
+    """Collect system information.
+
+    Args:
+        None
+
+    Returns:
+        list(tuple): System information in tuples (label, display data).
+    """
+    entries = []
+
+    # CPU and load
+    disp = []
+    disp.append(
+        f"{cpu_count(logical=True)} ({cpu_count(logical=False)}) @ "
+        f"{cpu_percent(interval=CPU_POLL_INTERVAL):0.0f}%"
+    )
+    if getloadavg is not None:
+        disp.append(" (")
+        # round the results of getloadavg(), precision varies across platforms
+        disp.append(", ".join(f"{x:0.1f}" for x in getloadavg()))
+        disp.append(")")
+    entries.append(("cpu/load", "".join(disp)))
+
+    # memory usage
+    disp = []
+    mem_usage = virtual_memory()
+    if mem_usage.available < 1_073_741_824:  # < 1GB
+        disp.append(f"{int(mem_usage.available / 1_048_576)}MB")
+    else:
+        disp.append(f"{mem_usage.available / 1_073_741_824:0.1f}GB")
+    disp.append(f" of {mem_usage.total / 1_073_741_824:0.1f}GB free")
+    entries.append(("memory", "".join(disp)))
+
+    # disk usage
+    disp = []
+    usage = disk_usage("/")
+    if usage.free < 1_073_741_824:  # < 1GB
+        disp.append(f"{int(usage.free / 1_048_576)}MB")
+    else:
+        disp.append(f"{usage.free / 1_073_741_824:0.1f}GB")
+    disp.append(f" of {usage.total / 1_073_741_824:0.1f}GB free")
+    entries.append(("disk", "".join(disp)))
+
+    return entries
+
+
 def test_binary_asan(bin_path):
     result = subprocess.run(
         ["nm", "-g", str(bin_path)],
@@ -126,7 +181,11 @@ def write_stats_file(outfile, fields, stats, warnings):
     @param warnings: Any textual warnings to write in addition to stats
     """
 
-    max_keylen = max(len(x) for x in fields)
+    sys_stats = sys_info()
+    max_keylen = max(
+        max(len(x) for x in fields),
+        max(len(x) for x, _ in sys_stats),
+    )
 
     with InterProcessLock(outfile + ".lock"), open(
         outfile, "w", encoding="utf-8"
@@ -140,6 +199,9 @@ def write_stats_file(outfile, fields, stats, warnings):
             if isinstance(val, list):
                 val = " ".join(val)
 
+            out_fp.write(f"{field}{' ' * (max_keylen + 1 - len(field))}: {val}\n")
+
+        for field, val in sys_stats:
             out_fp.write(f"{field}{' ' * (max_keylen + 1 - len(field))}: {val}\n")
 
         for warning in warnings:
