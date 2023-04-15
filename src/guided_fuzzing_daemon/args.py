@@ -3,15 +3,15 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 import argparse
 import sys
-import time
 from pathlib import Path
+from time import sleep
 
 from .utils import HAVE_FFPUPPET
 
 
 def parse_args(argv=None):
     if argv is None:
-        argv = sys.argv.copy()
+        argv = sys.argv.copy()  # pragma: no cover
 
     program_name = Path(argv.pop(0)).name
 
@@ -370,8 +370,7 @@ def parse_args(argv=None):
     afl_group.add_argument("rargs", nargs=argparse.REMAINDER)
 
     if not argv:
-        parser.print_help()
-        parser.print_help()
+        parser.print_help(sys.stderr)
         parser.exit(2)
 
     # For backwards compatibility, --aflfuzz is the default if nothing else is
@@ -383,11 +382,13 @@ def parse_args(argv=None):
     opts = parser.parse_args(argv)
 
     if opts.aflstats:
-        print("Error: --afl-stats is deprecated, use --stats instead.", file=sys.stderr)
-        time.sleep(2)
+        print(
+            "error: --afl-stats is unsupported, use --stats instead.", file=sys.stderr
+        )
+        sleep(2)
 
     if opts.transform and not Path(opts.transform).is_file():
-        parser.error(f"Error: Failed to locate transformation script {opts.transform}")
+        parser.error(f"Failed to locate transformation script {opts.transform}")
 
     if (
         opts.s3_queue_upload
@@ -401,67 +402,57 @@ def parse_args(argv=None):
         or opts.s3_queue_cleanup
     ):
         if not opts.s3_bucket or not opts.project:
-            parser.error(
-                "Error: Must specify both --s3-bucket and --project for S3 actions"
-            )
-
-    if opts.s3_corpus_refresh:
-        if opts.mode == "aflfuzz" and not opts.aflbindir:
-            parser.error(
-                "Error: Must specify --afl-binary-dir for refreshing the test corpus"
-            )
+            parser.error("Must specify both --s3-bucket and --project for S3 actions")
 
     if opts.mode == "nyx":
         if not opts.spec_fuzzer or not opts.spec_fuzzer.is_dir():
-            parser.error("Error: Must specify --spec-fuzzer with --nyx")
+            parser.error("Must specify --spec-fuzzer with --nyx")
 
         if not opts.sharedir or not opts.sharedir.is_dir():
-            parser.error("Error: Must specify --sharedir with --nyx")
+            parser.error("Must specify --sharedir with --nyx")
 
     if opts.mode == "libfuzzer":
         if not opts.rargs:
-            parser.error("Error: No arguments specified")
+            parser.error("No arguments specified")
 
     if opts.libfuzzer_auto_reduce is not None:
         if opts.libfuzzer_auto_reduce < 5:
-            parser.error("Error: Auto reduce threshold should at least be 5%.")
+            parser.error("Auto reduce threshold should at least be 5%.")
 
     if opts.mode == "aflfuzz":
         if opts.cmd and not opts.firefox:
-            parser.error(
-                "Error: Use --cmd either with libfuzzer or with afl in firefox mode"
-            )
+            parser.error("Use --cmd either with libfuzzer or with afl in firefox mode")
 
         if opts.firefox or opts.firefox_start_afl:
             if not HAVE_FFPUPPET:
                 parser.error(
-                    "Error: --firefox and --firefox-start-afl require FFPuppet to be "
+                    "--firefox and --firefox-start-afl require FFPuppet to be "
                     "installed"
                 )
 
             if opts.custom_cmdline_file:
                 parser.error(
-                    "Error: --custom-cmdline-file is incompatible with firefox options"
+                    "--custom-cmdline-file is incompatible with firefox options"
                 )
 
             if not opts.firefox_prefs or not opts.firefox_testpath:
                 parser.error(
-                    "Error: --firefox and --firefox-start-afl require --firefox-prefs"
+                    "--firefox and --firefox-start-afl require --firefox-prefs "
                     "and --firefox-testpath to be specified"
                 )
 
         if opts.firefox_start_afl:
             if not opts.aflbindir:
                 parser.error(
-                    "Error: Must specify --afl-binary-dir for starting AFL with "
-                    "firefox"
+                    "Must specify --afl-binary-dir for starting AFL with firefox"
                 )
 
         # Upload and FuzzManager modes require specifying the AFL directory
         if opts.s3_queue_upload or opts.fuzzmanager:
             if not opts.afloutdir:
-                parser.error(
-                    "Error: Must specify AFL output directory using --afl-output-dir"
-                )
+                parser.error("Must specify AFL output directory using --afl-output-dir")
+
+        if opts.s3_corpus_refresh and not opts.aflbindir:
+            parser.error("Must specify --afl-binary-dir for refreshing the test corpus")
 
     return opts
