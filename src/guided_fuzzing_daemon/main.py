@@ -81,5 +81,5 @@ def main(argv=None):
     if opts.mode == "nyx":
         return nyx_main(opts, collector, s3m)
 
-    print("Error: Unhandled case", file=sys.stderr)
+    print("error: Unhandled case", file=sys.stderr)
     return 2
