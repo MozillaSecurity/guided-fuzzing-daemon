@@ -383,7 +383,7 @@ class S3Manager:
         """
         build_path = Path(build_file)
         if not build_path.exists() or not build_path.is_file():
-            print("Error: Build must be a (zip) file.", file=sys.stderr)
+            print("error: Build must be a (zip) file.", file=sys.stderr)
             return
 
         remote_key = Key(self.bucket)
@@ -458,7 +458,7 @@ class S3Manager:
         test_files = [file for file in Path(corpus_dir).iterdir() if file.is_file()]
 
         if not test_files:
-            print("Error: Corpus is empty, refusing upload.", file=sys.stderr)
+            print("error: Corpus is empty, refusing upload.", file=sys.stderr)
             return
 
         # Make a zip bundle and upload it
@@ -609,7 +609,7 @@ def s3_main(opts):
             #  - no queues exist (recently refreshed manually)
             # print the error, but return 0
             print(
-                "Error: Failed to download a cmdline file from queue directories.",
+                "error: Failed to download a cmdline file from queue directories.",
                 file=sys.stderr,
             )
             return 0
@@ -637,14 +637,14 @@ def s3_main(opts):
 
         if not binary_search_result:
             print(
-                f"Error: Failed to locate binary {binary_name} in unpacked build.",
+                f"error: Failed to locate binary {binary_name} in unpacked build.",
                 file=sys.stderr,
             )
             return 2
 
         if len(binary_search_result) > 1:
             print(
-                f"Error: Binary name {binary_name} is ambiguous in unpacked build.",
+                f"error: Binary name {binary_name} is ambiguous in unpacked build.",
                 file=sys.stderr,
             )
             return 2
@@ -670,7 +670,7 @@ def s3_main(opts):
             # Run afl-cmin
             afl_cmin = Path(opts.aflbindir) / "afl-cmin"
             if not afl_cmin.exists():
-                print("Error: Unable to locate afl-cmin binary.", file=sys.stderr)
+                print("error: Unable to locate afl-cmin binary.", file=sys.stderr)
                 return 2
 
             if opts.firefox:
@@ -732,7 +732,7 @@ def s3_main(opts):
 
         if not any(updated_tests_dir.iterdir()):
             print(
-                "Error: Merge returned empty result, refusing to upload.",
+                "error: Merge returned empty result, refusing to upload.",
                 file=sys.stderr,
             )
             return 2
