@@ -1,19 +1,19 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
-import collections
 import os
-import queue
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
-import threading
-import time
-import traceback
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+from queue import Empty, Queue
+from shutil import move, rmtree
+from subprocess import DEVNULL, PIPE, Popen, run
+from tempfile import mkdtemp
+from threading import Thread
+from time import sleep, time
+from traceback import print_exc
 
 from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import CrashInfo
@@ -33,14 +33,14 @@ RE_LIBFUZZER_FEAT = re.compile(r"\s+ft: (\d+)")
 NO_CORPUS_MSG = "INFO: A corpus is not provided, starting from an empty corpus"
 
 
-class LibFuzzerMonitor(threading.Thread):
+class LibFuzzerMonitor(Thread):
     def __init__(self, process, kill_on_oom=True, mid=None, mqueue=None):
-        threading.Thread.__init__(self)
+        Thread.__init__(self)
 
         self.process = process
         self.process_stderr = process.stderr
         self.trace = []
-        self.stderr = collections.deque([], 128)
+        self.stderr = deque([], 128)
         self.in_trace = False
         self.testcase = None
         self.kill_on_oom = kill_on_oom
@@ -80,7 +80,7 @@ class LibFuzzerMonitor(threading.Thread):
                     self.cov = int(status_match.group(3))
 
                     if status_match.group(2) == "NEW":
-                        self.last_new = int(time.time())
+                        self.last_new = int(time())
 
                     exec_match = RE_LIBFUZZER_EXECS.search(line)
                     rss_match = RE_LIBFUZZER_RSS.search(line)
@@ -94,7 +94,7 @@ class LibFuzzerMonitor(threading.Thread):
                         self.feat = int(feat_match.group(1))
 
                 elif RE_LIBFUZZER_NEWPC.search(line) is not None:
-                    self.last_new_pc = int(time.time())
+                    self.last_new_pc = int(time())
 
                 elif self.in_trace:
                     self.trace.append(line.rstrip())
@@ -170,7 +170,7 @@ class LibFuzzerMonitor(threading.Thread):
         (max_sleep_time, poll_interval) = (10, 0.2)
         while self.process.poll() is None and max_sleep_time > 0:
             max_sleep_time -= poll_interval
-            time.sleep(poll_interval)
+            sleep(poll_interval)
 
         # Process is still alive, kill it and wait
         if self.process.poll() is None:
@@ -210,12 +210,6 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
         "ooms",
     ]
 
-    # Which fields to aggregate by mean
-    wanted_fields_mean = []
-
-    # Which fields should be displayed per fuzzer instance
-    wanted_fields_all = []
-
     # Which fields should be aggregated by max
     wanted_fields_max = ["last_new", "last_new_pc"]
 
@@ -231,8 +225,6 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
     # Generate total list of fields to write
     fields = []
     fields.extend(wanted_fields_total)
-    fields.extend(wanted_fields_mean)
-    fields.extend(wanted_fields_all)
     fields.extend(wanted_fields_max)
 
     aggregated_stats = {}
@@ -251,21 +243,6 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
             else:
                 # Assume global field
                 aggregated_stats[field] = stats[field]
-
-        for field in wanted_fields_mean:
-            assert hasattr(monitors[0], field), f"Field {field} not in monitor"
-            aggregated_stats[field] = 0
-            for monitor in monitors:
-                aggregated_stats[field] += getattr(monitor, field)
-            aggregated_stats[field] = float(aggregated_stats[field]) / float(
-                len(monitors)
-            )
-
-        for field in wanted_fields_all:
-            assert hasattr(monitors[0], field), f"Field {field} not in monitor"
-            aggregated_stats[field] = []
-            for monitor in monitors:
-                aggregated_stats[field].append(getattr(monitor, field))
 
         for field in wanted_fields_max:
             assert hasattr(monitors[0], field), f"Field {field} not in monitor"
@@ -300,13 +277,13 @@ def libfuzzer_main(opts, collector, s3m):
     assert opts.rargs
     binary = Path(opts.rargs[0])
     if not binary.exists():
-        print(f"Error: Specified binary does not exist: {binary}", file=sys.stderr)
+        print(f"error: Specified binary does not exist: {binary}", file=sys.stderr)
         return 2
 
     configuration = ProgramConfiguration.fromBinary(binary)
     if configuration is None:
         print(
-            "Error: Failed to load program configuration based on binary",
+            "error: Failed to load program configuration based on binary",
             file=sys.stderr,
         )
         return 2
@@ -333,7 +310,7 @@ def libfuzzer_main(opts, collector, s3m):
         # LibFuzzerMonitor expects an ASan trace on crash and CrashInfo doesn't
         # parse internal libFuzzer traces.
         print(
-            "Error: This wrapper currently only supports binaries built with "
+            "error: This wrapper currently only supports binaries built with "
             "AddressSanitizer.",
             file=sys.stderr,
         )
@@ -342,7 +319,7 @@ def libfuzzer_main(opts, collector, s3m):
     for arg in cmdline:
         if arg.startswith("-jobs=") or arg.startswith("-workers="):
             print(
-                "Error: Using -jobs and -workers is incompatible with this wrapper.",
+                "error: Using -jobs and -workers is incompatible with this wrapper.",
                 file=sys.stderr,
             )
             print(
@@ -359,11 +336,6 @@ def libfuzzer_main(opts, collector, s3m):
     for arg in cmdline_add_args:
         if arg not in cmdline:
             cmdline.append(arg)
-
-    env = {}
-    if opts.env:
-        env = dict(kv.split("=", 1) for kv in opts.env)
-        configuration.addEnvironmentVariables(env)
 
     # Copy the system environment variables by default and overwrite them
     # if they are specified through env.
@@ -383,9 +355,9 @@ def libfuzzer_main(opts, collector, s3m):
         metadata.update(dict(kv.split("=", 1) for kv in opts.metadata))
         configuration.addMetadata(metadata)
 
-        # Set LD_LIBRARY_PATH for convenience
-        if "LD_LIBRARY_PATH" not in env:
-            env["LD_LIBRARY_PATH"] = str(binary.parent)
+    # Set LD_LIBRARY_PATH for convenience
+    if "LD_LIBRARY_PATH" not in env:
+        env["LD_LIBRARY_PATH"] = str(binary.parent)
 
     signature_repeat_count = 0
     last_signature = None
@@ -405,7 +377,7 @@ def libfuzzer_main(opts, collector, s3m):
 
     if corpus_dir is None:
         print(
-            "Error: Failed to find a corpus directory on command line.",
+            "error: Failed to find a corpus directory on command line.",
             file=sys.stderr,
         )
         return 2
@@ -436,7 +408,7 @@ def libfuzzer_main(opts, collector, s3m):
             )
 
         if corpus_auto_reduce_threshold <= len(original_corpus):
-            print("Error: Invalid auto reduce threshold specified.", file=sys.stderr)
+            print("error: Invalid auto reduce threshold specified.", file=sys.stderr)
             return 2
 
     # Write a cmdline file, similar to what our AFL fork does
@@ -447,7 +419,7 @@ def libfuzzer_main(opts, collector, s3m):
                 print(rarg, file=cmdline_fd)
 
     monitors = [None] * opts.libfuzzer_instances
-    monitor_queue = queue.Queue()
+    monitor_queue = Queue()
 
     # Keep track how often we crash to abort in certain situations
     crashes_per_minute_interval = 0
@@ -494,10 +466,10 @@ def libfuzzer_main(opts, collector, s3m):
                             break
 
                     # pylint: disable=consider-using-with
-                    process = subprocess.Popen(
+                    process = Popen(
                         cmdline,
                         # stdout=None,
-                        stderr=subprocess.PIPE,
+                        stderr=PIPE,
                         env=env,
                         text=True,
                     )
@@ -553,23 +525,23 @@ def libfuzzer_main(opts, collector, s3m):
                 # Filter out other stuff we don't want for merging
                 merge_cmdline = [x for x in merge_cmdline if not x.startswith("-dict=")]
 
-                new_corpus_dir = tempfile.mkdtemp(prefix="fm-libfuzzer-automerge-")
+                new_corpus_dir = mkdtemp(prefix="fm-libfuzzer-automerge-")
                 merge_cmdline.extend(["-merge=1", new_corpus_dir, str(corpus_dir)])
 
                 print("Running automated merge...", file=sys.stderr)
                 env = os.environ.copy()
                 env["LD_LIBRARY_PATH"] = str(Path(merge_cmdline[0]).parent)
-                devnull = subprocess.DEVNULL
+                devnull = DEVNULL
                 if opts.debug:
                     devnull = None
-                subprocess.run(merge_cmdline, stdout=devnull, env=env, check=True)
+                run(merge_cmdline, stdout=devnull, env=env, check=True)
 
                 if not any(Path(new_corpus_dir).iterdir()):
-                    print("Error: Merge returned empty result, refusing to continue.")
+                    print("error: Merge returned empty result, refusing to continue.")
                     return 2
 
-                shutil.rmtree(str(corpus_dir))
-                shutil.move(new_corpus_dir, str(corpus_dir))
+                rmtree(str(corpus_dir))
+                move(new_corpus_dir, str(corpus_dir))
 
                 # Update our corpus size
                 corpus_size = sum(1 for _ in corpus_dir.iterdir())
@@ -600,7 +572,7 @@ def libfuzzer_main(opts, collector, s3m):
 
             # Only upload new corpus files every 2 hours or after corpus reduction
             if opts.s3_queue_upload and (
-                corpus_reduction_done or last_queue_upload < int(time.time()) - 7200
+                corpus_reduction_done or last_queue_upload < int(time()) - 7200
             ):
                 s3m.upload_libfuzzer_queue_dir(
                     str(base_dir), str(corpus_dir), original_corpus
@@ -609,12 +581,12 @@ def libfuzzer_main(opts, collector, s3m):
                 # Pull down queue files from other queues directly into the corpus
                 s3m.download_libfuzzer_queues(str(corpus_dir))
 
-                last_queue_upload = int(time.time())
+                last_queue_upload = int(time())
                 corpus_reduction_done = False
 
             try:
                 result = monitor_queue.get(True, 10)
-            except queue.Empty:
+            except Empty:
                 continue
 
             monitor = monitors[result]
@@ -700,8 +672,8 @@ def libfuzzer_main(opts, collector, s3m):
 
             stats["crashes"] += 1
 
-            if int(time.time()) - crashes_per_minute_interval > 60:
-                crashes_per_minute_interval = int(time.time())
+            if int(time()) - crashes_per_minute_interval > 60:
+                crashes_per_minute_interval = int(time())
                 crashes_per_minute = 0
             crashes_per_minute += 1
             stats["crashes_per_minute"] = crashes_per_minute
@@ -782,6 +754,6 @@ def libfuzzer_main(opts, collector, s3m):
             if sys.exc_info()[0] is not None:
                 # We caught an exception, print it now when all our monitors are
                 # down
-                traceback.print_exc()
+                print_exc()
 
     return 0
