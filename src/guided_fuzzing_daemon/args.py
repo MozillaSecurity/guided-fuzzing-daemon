@@ -243,11 +243,6 @@ def parse_args(argv=None):
         metavar="FILE",
     )
     fm_group.add_argument(
-        "--env-file",
-        help="Path to a file with additional environment variables",
-        metavar="FILE",
-    )
-    fm_group.add_argument(
         "--serverhost",
         help="Server hostname for remote signature management.",
         metavar="HOST",
@@ -348,6 +343,11 @@ def parse_args(argv=None):
             "Start AFL with the given Firefox binary, remaining arguments being "
             "passed to AFL"
         ),
+    )
+    afl_group.add_argument(
+        "--env-file",
+        help="Path to a file with additional environment variables",
+        metavar="FILE",
     )
     afl_group.add_argument(
         "--afl-output-dir",
