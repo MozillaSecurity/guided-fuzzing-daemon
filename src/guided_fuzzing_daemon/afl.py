@@ -170,7 +170,7 @@ def scan_crashes(
             else:
                 (submission.parent / f"{submission.name}.failed").touch()
                 print(
-                    "Error: Failed to reproduce the given crash, cannot submit.",
+                    "error: Failed to reproduce the given crash, cannot submit.",
                     file=sys.stderr,
                 )
 
@@ -355,7 +355,7 @@ def aflfuzz_main(opts, collector, s3m):
 
             if not afl_out_dirs:
                 print(
-                    f"Error: Directory {opts.afloutdir} does not appear to be a "
+                    f"error: Directory {opts.afloutdir} does not appear to be a "
                     "valid AFL output/sync directory",
                     file=sys.stderr,
                 )
