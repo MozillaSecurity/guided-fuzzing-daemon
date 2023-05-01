@@ -178,6 +178,11 @@ class LibFuzzerMonitor(Thread):
             self.process.wait()
 
 
+def _extend_unique(lst, ext):
+    """As list.extend, but only values not already in the list are appended"""
+    lst.extend(val for val in ext if val not in set(lst))
+
+
 def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
     """
     Generate aggregated statistics for the given overall libfuzzer stats and the
@@ -198,8 +203,6 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
 
     # Which fields to add
     wanted_fields_total = [
-        "cov",
-        "feat",
         "execs_done",
         "execs_per_sec",
         "rss_mb",
@@ -208,6 +211,14 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
         "crashes",
         "timeouts",
         "ooms",
+    ]
+
+    # Fields to track min/max across jobs
+    wanted_fields_minmax = [
+        "cov",
+        "feat",
+        "execs_per_sec",
+        "rss_mb",
     ]
 
     # Which fields should be aggregated by max
@@ -225,9 +236,11 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
     # Generate total list of fields to write
     fields = []
     fields.extend(wanted_fields_total)
-    fields.extend(wanted_fields_max)
+    _extend_unique(fields, wanted_fields_minmax)
+    _extend_unique(fields, wanted_fields_max)
 
     aggregated_stats = {}
+    minmax_stats = {}
 
     # In certain cases, e.g. when exiting, one or more monitors can be down.
     monitors = [monitor for monitor in monitors if monitor is not None]
@@ -243,6 +256,18 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
             else:
                 # Assume global field
                 aggregated_stats[field] = stats[field]
+
+        for field in wanted_fields_minmax:
+            assert hasattr(monitors[0], field), f"Field {field} not in monitor"
+            for monitor in monitors:
+                value = getattr(monitor, field)
+                if field in minmax_stats:
+                    minmax_stats[field] = (
+                        min(value, minmax_stats[field][0]),
+                        max(value, minmax_stats[field][1]),
+                    )
+                else:
+                    minmax_stats[field] = (value, value)
 
         for field in wanted_fields_max:
             assert hasattr(monitors[0], field), f"Field {field} not in monitor"
@@ -268,6 +293,27 @@ def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
                 .isoformat()
                 .replace("+00:00", "Z")
             )
+
+    # Format min/max fields
+    for field in wanted_fields_minmax:
+        if field not in minmax_stats:
+            continue  # pragma: no cover
+        minvalue, maxvalue = minmax_stats[field]
+        if field in aggregated_stats:
+            aggregated_stats[
+                field
+            ] = f"{aggregated_stats[field]} total ({minvalue}-{maxvalue} min/max)"
+        else:
+            aggregated_stats[field] = f"{minvalue}-{maxvalue} min/max"
+
+    # Merge crashes/timeouts/ooms
+    fields[fields.index("crashes")] = "crashes/timeouts/ooms"
+    fields.remove("timeouts")
+    fields.remove("ooms")
+    aggregated_stats["crashes/timeouts/ooms"] = (
+        f"{aggregated_stats['crashes']}, {aggregated_stats['timeouts']}, "
+        f"{aggregated_stats['ooms']}"
+    )
 
     # Write out data
     write_stats_file(outfile, fields, aggregated_stats, warnings)
