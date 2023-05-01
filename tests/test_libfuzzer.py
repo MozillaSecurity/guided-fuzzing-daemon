@@ -229,6 +229,16 @@ def test_libfuzzer_05(mocker, tmp_path, capsys):
     assert "corpus directory" in stdio.err
     args.rargs.append(str(corpus))
 
+    args.rargs.append("-jobs=")
+    assert libfuzzer_main(args, collector, s3m) == 2
+    stdio = capsys.readouterr()
+    assert "-jobs and -workers is incompatible" in stdio.err
+    args.rargs[-1] = "-workers="
+    assert libfuzzer_main(args, collector, s3m) == 2
+    stdio = capsys.readouterr()
+    assert "-jobs and -workers is incompatible" in stdio.err
+    args.rargs.pop()
+
     asan_test.return_value = False
     assert libfuzzer_main(args, collector, s3m) == 2
     stdio = capsys.readouterr()
