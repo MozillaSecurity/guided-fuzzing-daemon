@@ -390,17 +390,17 @@ def parse_args(argv=None):
     if opts.transform and not Path(opts.transform).is_file():
         parser.error(f"Failed to locate transformation script {opts.transform}")
 
-    if (
-        opts.s3_queue_upload
-        or opts.s3_corpus_refresh
-        or opts.s3_build_download
+    s3_main = (
+        opts.s3_build_download
         or opts.s3_build_upload
         or opts.s3_corpus_download
-        or opts.s3_corpus_upload
-        or opts.s3_queue_status
+        or opts.s3_corpus_refresh
         or opts.s3_corpus_status
+        or opts.s3_corpus_upload
         or opts.s3_queue_cleanup
-    ):
+        or opts.s3_queue_status
+    )
+    if opts.s3_queue_upload or s3_main:
         if not opts.s3_bucket or not opts.project:
             parser.error("Must specify both --s3-bucket and --project for S3 actions")
 
@@ -411,7 +411,7 @@ def parse_args(argv=None):
         if not opts.sharedir or not opts.sharedir.is_dir():
             parser.error("Must specify --sharedir with --nyx")
 
-    if opts.mode == "libfuzzer":
+    if opts.mode == "libfuzzer" and not s3_main:
         if not opts.rargs:
             parser.error("No arguments specified")
 

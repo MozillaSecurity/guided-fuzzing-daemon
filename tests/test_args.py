@@ -87,3 +87,19 @@ def test_args_05(capsys, tmp_path):
         parse_args(["gfd", "--nyx", f"--spec-fuzzer={tmp_path}"])
     stdio = capsys.readouterr()
     assert "Must specify --sharedir" in stdio.err
+
+
+def test_args_06():
+    """libfuzzer does not need args when doing s3 actions"""
+    parse_args(
+        [
+            "gfd",
+            "--libfuzzer",
+            "--s3-corpus-refresh",
+            "corpus",
+            "--s3-bucket",
+            "bucket",
+            "--project",
+            "test",
+        ]
+    )
