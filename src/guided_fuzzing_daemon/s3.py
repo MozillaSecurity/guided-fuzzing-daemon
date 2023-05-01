@@ -20,10 +20,10 @@ import platform
 import random
 import shutil
 import stat
-import subprocess
 import sys
 import time
 from pathlib import Path, PurePosixPath
+from subprocess import DEVNULL, run
 from tempfile import mkstemp
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -371,7 +371,7 @@ class S3Manager:
         remote_key.name = self.remote_path_build
         remote_key.get_contents_to_filename(str(zip_dest))
 
-        subprocess.run(["unzip", str(zip_dest), "-d", str(build_path)], check=True)
+        run(["unzip", str(zip_dest), "-d", str(build_path)], check=True)
 
     def upload_build(self, build_file):
         """
@@ -649,14 +649,14 @@ def s3_main(opts):
             )
             return 2
 
-        cmdline[0] = binary_search_result[0]
+        cmdline[0] = str(binary_search_result[0])
 
         # Download our current corpus into the queues directory as well
         print(
             f"Downloading corpus from s3://{opts.s3_bucket}/{opts.project}/corpus/ to "
             f"{queues_dir}"
         )
-        s3m.download_corpus(queues_dir)
+        s3m.download_corpus(str(queues_dir))
 
         # Ensure the directory for our new tests is empty
         updated_tests_dir = corpus_path / "tests"
@@ -705,10 +705,10 @@ def s3_main(opts):
             env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
             if opts.firefox:
                 env.update(ff_env)
-            devnull = subprocess.DEVNULL
+            devnull = DEVNULL
             if opts.debug:
                 devnull = None
-            subprocess.run(afl_cmdline, stdout=devnull, env=env, check=True)
+            run(afl_cmdline, stdout=devnull, env=env, check=True)
 
             if opts.firefox:
                 ffp.clean_up()
@@ -725,10 +725,10 @@ def s3_main(opts):
             print("Running libFuzzer merge")
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
-            devnull = subprocess.DEVNULL
+            devnull = DEVNULL
             if opts.debug:
                 devnull = None
-            subprocess.run(cmdline, stdout=devnull, env=env, check=True)
+            run(cmdline, stdout=devnull, env=env, check=True)
 
         if not any(updated_tests_dir.iterdir()):
             print(
