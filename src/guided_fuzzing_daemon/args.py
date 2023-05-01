@@ -383,7 +383,7 @@ def parse_args(argv=None):
 
     if opts.aflstats:
         print(
-            "error: --afl-stats is unsupported, use --stats instead.", file=sys.stderr
+            "warning: --afl-stats is unsupported, use --stats instead.", file=sys.stderr
         )
         sleep(2)
 
