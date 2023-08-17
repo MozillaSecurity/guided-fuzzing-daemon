@@ -125,6 +125,7 @@ def parse_args(argv=None):
     )
     s3_group.add_argument(
         "--s3-corpus-download",
+        type=Path,
         help="Use S3 to download the test corpus for the specified project",
         metavar="DIR",
     )
