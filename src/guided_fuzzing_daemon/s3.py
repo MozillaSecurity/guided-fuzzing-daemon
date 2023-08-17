@@ -396,15 +396,14 @@ class S3Manager:
         Downloads the test corpus from the specified S3 bucket and project
         into the specified directory, without overwriting any files.
 
-        @type corpus_dir: String
+        @type corpus_dir: Path
         @param corpus_dir: Directory where to store test corpus files
 
         @type random_subset_size: int
         @param random_subset_size: If specified, only download a random subset of
                                    the corpus, with the specified size.
         """
-        corpus_path = Path(corpus_dir)
-        corpus_path.mkdir(exist_ok=True)
+        corpus_dir.mkdir(exist_ok=True)
 
         if not random_subset_size:
             # If we are not instructed to download only a sample of the corpus,
@@ -428,7 +427,7 @@ class S3Manager:
                                 file=sys.stderr,
                             )
                         else:
-                            zip_file.extractall(corpus_dir)
+                            zip_file.extractall(str(corpus_dir))
                             return
                 finally:
                     os.remove(zip_dest)
@@ -656,7 +655,7 @@ def s3_main(opts):
             f"Downloading corpus from s3://{opts.s3_bucket}/{opts.project}/corpus/ to "
             f"{queues_dir}"
         )
-        s3m.download_corpus(str(queues_dir))
+        s3m.download_corpus(queues_dir)
 
         # Ensure the directory for our new tests is empty
         updated_tests_dir = corpus_path / "tests"

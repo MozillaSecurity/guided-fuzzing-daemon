@@ -61,6 +61,6 @@ def test_s3_main_02(mocker, tmp_path):
         mocker.call.clean_queue_dirs(),
         mocker.call.download_queue_dirs(str(tmp_path)),
         mocker.call.download_build(str(tmp_path / "build")),
-        mocker.call.download_corpus(str(tmp_path / "queues")),
+        mocker.call.download_corpus(tmp_path / "queues"),
         mocker.call.upload_corpus(str(tmp_path / "tests"), corpus_delete=True),
     ]
