@@ -4,6 +4,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from functools import partial
 from itertools import chain, count, repeat
+from os import chdir
 from pathlib import Path
 from queue import Empty
 
@@ -42,6 +43,7 @@ def test_libfuzzer_01(mocker, tmp_path):
     binary.touch()
     corpus = tmp_path / "corpus"
     corpus.mkdir()
+    chdir(tmp_path)
     args.env = ["env1=val1", "env2=val2"]
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
@@ -50,6 +52,7 @@ def test_libfuzzer_01(mocker, tmp_path):
     args.metadata = ["meta1=metaval1", "meta2=metaval2"]
     args.rargs = [str(binary), str(corpus)]
     args.stats = None
+
     assert libfuzzer_main(args, collector, s3m) == 0
     assert monitor.call_count == 1
     assert queue.return_value.get.call_count == 2
@@ -95,6 +98,7 @@ def test_libfuzzer_02(mocker, tmp_path):
     binary.touch()
     corpus = tmp_path / "corpus"
     corpus.mkdir()
+    chdir(tmp_path)
     args.env = []
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
@@ -131,6 +135,7 @@ def test_libfuzzer_03(mocker, tmp_path):
     binary.touch()
     corpus = tmp_path / "corpus"
     corpus.mkdir()
+    chdir(tmp_path)
     args.env = []
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
@@ -171,6 +176,7 @@ def test_libfuzzer_04(mocker, tmp_path):
     binary.touch()
     corpus = tmp_path / "corpus"
     corpus.mkdir()
+    chdir(tmp_path)
     args.env = []
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
