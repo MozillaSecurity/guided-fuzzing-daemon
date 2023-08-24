@@ -20,8 +20,7 @@ from .utils import HAVE_FFPUPPET, apply_transform, setup_firefox, warn_local
 
 
 def command_file_to_list(cmd_file: Path) -> Tuple[Optional[int], List[str]]:
-    """
-    Open and parse custom command line file
+    """Open and parse custom command line file
 
     Args:
         cmd_file: Command line file containing list of commands
