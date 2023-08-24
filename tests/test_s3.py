@@ -1,3 +1,4 @@
+# type: ignore
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -37,12 +38,12 @@ def test_s3_main_02(mocker, tmp_path):
     args.mode = "libfuzzer"
     for s3_action in S3_ACTIONS:
         setattr(args, s3_action, None)
-    args.s3_corpus_refresh = str(tmp_path)
+    args.s3_corpus_refresh = tmp_path
     args.build = None
     assert s3_main(args) == 0
     assert mgr.return_value.method_calls == [
         mocker.call.clean_queue_dirs(),
-        mocker.call.download_queue_dirs(str(tmp_path)),
+        mocker.call.download_queue_dirs(tmp_path),
     ]
     mgr.reset_mock()
     (tmp_path / "cmdline").write_text("build/firefox")
@@ -59,8 +60,8 @@ def test_s3_main_02(mocker, tmp_path):
     assert s3_main(args) == 0
     assert mgr.return_value.method_calls == [
         mocker.call.clean_queue_dirs(),
-        mocker.call.download_queue_dirs(str(tmp_path)),
-        mocker.call.download_build(str(tmp_path / "build")),
+        mocker.call.download_queue_dirs(tmp_path),
+        mocker.call.download_build(tmp_path / "build"),
         mocker.call.download_corpus(tmp_path / "queues"),
-        mocker.call.upload_corpus(str(tmp_path / "tests"), corpus_delete=True),
+        mocker.call.upload_corpus(tmp_path / "tests", corpus_delete=True),
     ]

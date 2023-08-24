@@ -25,6 +25,12 @@ exclude_lines = [
 [tool.isort]
 profile = "black"
 
+[tool.mypy]
+ignore_missing_imports = true
+strict = true
+show_error_codes = true
+warn_unused_ignores = false
+
 [tool.pylint.format]
 max-line-length = 88
 

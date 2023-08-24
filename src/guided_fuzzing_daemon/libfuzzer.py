@@ -4,8 +4,8 @@
 import os
 import re
 import sys
+from argparse import Namespace
 from collections import deque
-from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty, Queue
 from shutil import move, rmtree
@@ -14,11 +14,23 @@ from tempfile import mkdtemp
 from threading import Thread
 from time import sleep, time
 from traceback import print_exc
+from typing import Deque, List, Optional, cast
 
+from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import CrashInfo
 
-from .utils import apply_transform, test_binary_asan, warn_local, write_stats_file
+from .s3 import S3Manager
+from .stats import (
+    GeneratedField,
+    JoinField,
+    MaxTimeField,
+    MinMaxField,
+    StatAggregator,
+    SumField,
+    SumMinMaxField,
+)
+from .utils import apply_transform, test_binary_asan, warn_local
 
 RE_LIBFUZZER_STATUS = re.compile(
     r"\s*#(\d+)\s+(INITED|NEW|RELOAD|REDUCE|pulse)\s+cov: (\d+)"
@@ -34,21 +46,29 @@ NO_CORPUS_MSG = "INFO: A corpus is not provided, starting from an empty corpus"
 
 
 class LibFuzzerMonitor(Thread):
-    def __init__(self, process, kill_on_oom=True, mid=None, mqueue=None):
+    def __init__(
+        self,
+        process: "Popen[str]",
+        mid: int,
+        mqueue: "Queue[int]",
+        kill_on_oom: bool = True,
+    ) -> None:
         Thread.__init__(self)
 
         self.process = process
-        self.process_stderr = process.stderr
-        self.trace = []
-        self.stderr = deque([], 128)
+        stderr = process.stderr
+        assert stderr is not None
+        self.process_stderr = stderr
+        self.trace: List[str] = []
+        self.stderr: Deque[str] = deque([], 128)
         self.in_trace = False
-        self.testcase = None
+        self.testcase: Optional[Path] = None
         self.kill_on_oom = kill_on_oom
         self.had_oom = False
         self.hit_thread_limit = False
         self.inited = False
         self.mid = mid
-        self.mqueue = mqueue
+        self.mqueue: Optional["Queue[int]"] = mqueue
 
         # Keep some statistics
         self.cov = 0
@@ -60,9 +80,9 @@ class LibFuzzerMonitor(Thread):
         self.last_new_pc = 0
 
         # Store potential exceptions
-        self.exc = None
+        self.exc: Optional[Exception] = None
 
-    def run(self):
+    def run(self) -> None:
         assert not self.hit_thread_limit
         assert not self.had_oom
 
@@ -150,16 +170,16 @@ class LibFuzzerMonitor(Thread):
             if self.mqueue is not None:
                 self.mqueue.put(self.mid)
 
-    def get_asan_trace(self):
+    def get_asan_trace(self) -> List[str]:
         return self.trace
 
-    def get_testcase(self):
+    def get_testcase(self) -> Optional[Path]:
         return self.testcase
 
-    def get_stderr(self):
+    def get_stderr(self) -> List[str]:
         return list(self.stderr)
 
-    def terminate(self):
+    def terminate(self) -> None:
         print(f"[Job {self.mid}] Received terminate request...", file=sys.stderr)
 
         # Avoid sending anything through the queue when the run() loop exits
@@ -167,7 +187,7 @@ class LibFuzzerMonitor(Thread):
         self.process.terminate()
 
         # Emulate a wait() with timeout through poll and sleep
-        (max_sleep_time, poll_interval) = (10, 0.2)
+        (max_sleep_time, poll_interval) = (10.0, 0.2)
         while self.process.poll() is None and max_sleep_time > 0:
             max_sleep_time -= poll_interval
             sleep(poll_interval)
@@ -178,148 +198,57 @@ class LibFuzzerMonitor(Thread):
             self.process.wait()
 
 
-def _extend_unique(lst, ext):
+class LibFuzzerStats(StatAggregator):
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_field("execs_done", SumField())
+        self.add_field("execs_per_sec", SumMinMaxField())
+        self.add_field("rss_mb", SumMinMaxField())
+        self.add_field("corpus_size", GeneratedField())
+        self.add_field("next_auto_reduce", GeneratedField())
+        self.add_field("crashes", GeneratedField(hidden=True))
+        self.add_field("timeouts", GeneratedField(hidden=True))
+        self.add_field("ooms", GeneratedField(hidden=True))
+        self.add_field(
+            "crashes/timeouts/ooms",
+            JoinField(
+                (self.fields["crashes"], self.fields["timeouts"], self.fields["ooms"])
+            ),
+        )
+        self.add_field("cov", MinMaxField())
+        self.add_field("feat", MinMaxField())
+        self.add_field("last_new", MaxTimeField(ignore_reset=True))
+        self.add_field("last_new_pc", MaxTimeField(ignore_reset=True))
+        self.add_sys_stats()
+
+    def update_and_write(
+        self,
+        outfile: Path,
+        monitors: List[Optional[LibFuzzerMonitor]],
+        warnings: List[str],
+    ) -> None:
+        self.reset()
+
+        for monitor in monitors:
+            if monitor is None:
+                continue
+            for field, val in self.fields.items():
+                if val.generated or val.hidden:
+                    continue
+                assert hasattr(monitor, field), f"Field {field} not in monitor"
+                val.update(getattr(monitor, field))
+
+        self.write_file(outfile, warnings)
+
+
+def _extend_unique(lst: List[str], ext: List[str]) -> None:
     """As list.extend, but only values not already in the list are appended"""
     lst.extend(val for val in ext if val not in set(lst))
 
 
-def write_aggregated_stats_libfuzzer(outfile, stats, monitors, warnings):
-    """
-    Generate aggregated statistics for the given overall libfuzzer stats and the
-    individual monitors.  Results are written to the specified output file.
-
-    @type outfile: str
-    @param outfile: Output file for aggregated statistics
-
-    @type stats: dict
-    @param stats: Dictionary containing overall stats
-
-    @type monitors: list
-    @param monitors: A list of LibFuzzerMonitor instances
-
-    @type warnings: list
-    @param warnings: Any textual warnings to write in addition to stats
-    """
-
-    # Which fields to add
-    wanted_fields_total = [
-        "execs_done",
-        "execs_per_sec",
-        "rss_mb",
-        "corpus_size",
-        "next_auto_reduce",
-        "crashes",
-        "timeouts",
-        "ooms",
-    ]
-
-    # Fields to track min/max across jobs
-    wanted_fields_minmax = [
-        "cov",
-        "feat",
-        "execs_per_sec",
-        "rss_mb",
-    ]
-
-    # Which fields should be aggregated by max
-    wanted_fields_max = ["last_new", "last_new_pc"]
-
-    # This is a list of fields mentioned in one of the lists above already,
-    # that should *additionally* also be aggregated with the global state.
-    # Only supported for total and max aggregation.
-    wanted_fields_global_aggr = ["execs_done", "last_new", "last_new_pc"]
-
-    # These fields should already be defined above, and will be converted
-    # from unix timestamp to ISO8601 format before being written.
-    wanted_fields_conv_time = ["last_new", "last_new_pc"]
-
-    # Generate total list of fields to write
-    fields = []
-    fields.extend(wanted_fields_total)
-    _extend_unique(fields, wanted_fields_minmax)
-    _extend_unique(fields, wanted_fields_max)
-
-    aggregated_stats = {}
-    minmax_stats = {}
-
-    # In certain cases, e.g. when exiting, one or more monitors can be down.
-    monitors = [monitor for monitor in monitors if monitor is not None]
-
-    if monitors:
-        for field in wanted_fields_total:
-            if hasattr(monitors[0], field):
-                aggregated_stats[field] = 0
-                for monitor in monitors:
-                    aggregated_stats[field] += getattr(monitor, field)
-                if field in wanted_fields_global_aggr:
-                    aggregated_stats[field] += stats[field]
-            else:
-                # Assume global field
-                aggregated_stats[field] = stats[field]
-
-        for field in wanted_fields_minmax:
-            assert hasattr(monitors[0], field), f"Field {field} not in monitor"
-            for monitor in monitors:
-                value = getattr(monitor, field)
-                if field in minmax_stats:
-                    minmax_stats[field] = (
-                        min(value, minmax_stats[field][0]),
-                        max(value, minmax_stats[field][1]),
-                    )
-                else:
-                    minmax_stats[field] = (value, value)
-
-        for field in wanted_fields_max:
-            assert hasattr(monitors[0], field), f"Field {field} not in monitor"
-            aggregated_stats[field] = 0
-            for monitor in monitors:
-                val = getattr(monitor, field)
-                if val > aggregated_stats[field]:
-                    aggregated_stats[field] = val
-            if (
-                field in wanted_fields_global_aggr
-                and stats[field] > aggregated_stats[field]
-            ):
-                aggregated_stats[field] = stats[field]
-
-        for field in wanted_fields_global_aggr:
-            # Write aggregated stats back into the global stats for max fields
-            if field in wanted_fields_max:
-                stats[field] = aggregated_stats[field]
-
-        for field in wanted_fields_conv_time:
-            aggregated_stats[field] = (
-                datetime.fromtimestamp(aggregated_stats[field], tz=timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
-
-    # Format min/max fields
-    for field in wanted_fields_minmax:
-        if field not in minmax_stats:
-            continue  # pragma: no cover
-        minvalue, maxvalue = minmax_stats[field]
-        if field in aggregated_stats:
-            aggregated_stats[
-                field
-            ] = f"{aggregated_stats[field]} total ({minvalue}-{maxvalue} min/max)"
-        else:
-            aggregated_stats[field] = f"{minvalue}-{maxvalue} min/max"
-
-    # Merge crashes/timeouts/ooms
-    fields[fields.index("crashes")] = "crashes/timeouts/ooms"
-    fields.remove("timeouts")
-    fields.remove("ooms")
-    aggregated_stats["crashes/timeouts/ooms"] = (
-        f"{aggregated_stats['crashes']}, {aggregated_stats['timeouts']}, "
-        f"{aggregated_stats['ooms']}"
-    )
-
-    # Write out data
-    write_stats_file(outfile, fields, aggregated_stats, warnings)
-
-
-def libfuzzer_main(opts, collector, s3m):
+def libfuzzer_main(
+    opts: Namespace, collector: Optional[Collector], s3m: Optional[S3Manager]
+) -> int:
     assert opts.rargs
     binary = Path(opts.rargs[0])
     if not binary.exists():
@@ -435,7 +364,7 @@ def libfuzzer_main(opts, collector, s3m):
     original_corpus = {item.name for item in corpus_dir.iterdir()}
 
     corpus_auto_reduce_threshold = None
-    corpus_auto_reduce_ratio = None
+    corpus_auto_reduce_ratio: Optional[float] = None
     if opts.libfuzzer_auto_reduce is not None:
         assert opts.libfuzzer_auto_reduce >= 5
 
@@ -464,27 +393,16 @@ def libfuzzer_main(opts, collector, s3m):
             if not Path(rarg).is_dir():
                 print(rarg, file=cmdline_fd)
 
-    monitors = [None] * opts.libfuzzer_instances
-    monitor_queue = Queue()
+    monitors: List[Optional[LibFuzzerMonitor]] = [None] * opts.libfuzzer_instances
+    monitor_queue: "Queue[int]" = Queue()
 
     # Keep track how often we crash to abort in certain situations
     crashes_per_minute_interval = 0
     crashes_per_minute = 0
 
     # Global stats
-    stats = {
-        "cov": 0,
-        "feat": 0,
-        "crashes": 0,
-        "crashes_per_minute": 0,
-        "timeouts": 0,
-        "ooms": 0,
-        "corpus_size": len(original_corpus),
-        "execs_done": 0,
-        "last_new": 0,
-        "last_new_pc": 0,
-        "next_auto_reduce": 0,
-    }
+    stats = LibFuzzerStats()
+    stats.fields["corpus_size"].update(len(original_corpus))
 
     # Memorize if we just did a corpus reduction, for S3 sync
     corpus_reduction_done = False
@@ -520,12 +438,11 @@ def libfuzzer_main(opts, collector, s3m):
                         text=True,
                     )
 
-                    monitors[idx] = LibFuzzerMonitor(
-                        process, mid=idx, mqueue=monitor_queue
-                    )
-                    monitors[idx].start()
+                    mon = LibFuzzerMonitor(process, mid=idx, mqueue=monitor_queue)
+                    monitors[idx] = mon
+                    mon.start()
 
-            corpus_size = None
+            corpus_size: Optional[int] = None
             if corpus_auto_reduce_threshold is not None or opts.stats:
                 # We need the corpus size for stats and the auto reduce feature,
                 # so we cache it here to avoid running listdir multiple times.
@@ -533,6 +450,7 @@ def libfuzzer_main(opts, collector, s3m):
 
             if (
                 corpus_auto_reduce_threshold is not None
+                and corpus_size is not None
                 and corpus_size >= corpus_auto_reduce_threshold
             ):
                 print("Preparing automated merge...", file=sys.stderr)
@@ -553,7 +471,9 @@ def libfuzzer_main(opts, collector, s3m):
                         if opts.stats:
                             # Make sure the execs that this monitor did survive in
                             # stats
-                            stats["execs_done"] += monitor.execs_done
+                            cast(SumField, stats.fields["execs_done"]).add_to_base(
+                                monitor.execs_done
+                            )
 
                 # All monitors are assumed to be dead now, clear the monitor queue
                 # in case it has remaining ids from monitors that terminated on
@@ -571,28 +491,29 @@ def libfuzzer_main(opts, collector, s3m):
                 # Filter out other stuff we don't want for merging
                 merge_cmdline = [x for x in merge_cmdline if not x.startswith("-dict=")]
 
-                new_corpus_dir = mkdtemp(prefix="fm-libfuzzer-automerge-")
-                merge_cmdline.extend(["-merge=1", new_corpus_dir, str(corpus_dir)])
+                new_corpus_dir = Path(mkdtemp(prefix="fm-libfuzzer-automerge-"))
+                merge_cmdline.extend(["-merge=1", str(new_corpus_dir), str(corpus_dir)])
 
                 print("Running automated merge...", file=sys.stderr)
                 env = os.environ.copy()
                 env["LD_LIBRARY_PATH"] = str(Path(merge_cmdline[0]).parent)
-                devnull = DEVNULL
+                devnull: Optional[int] = DEVNULL
                 if opts.debug:
                     devnull = None
                 run(merge_cmdline, stdout=devnull, env=env, check=True)
 
-                if not any(Path(new_corpus_dir).iterdir()):
+                if not any(new_corpus_dir.iterdir()):
                     print("error: Merge returned empty result, refusing to continue.")
                     return 2
 
                 rmtree(str(corpus_dir))
-                move(new_corpus_dir, str(corpus_dir))
+                move(str(new_corpus_dir), str(corpus_dir))
 
                 # Update our corpus size
                 corpus_size = sum(1 for _ in corpus_dir.iterdir())
 
                 # Update our auto-reduction target
+                assert corpus_auto_reduce_ratio is not None
                 if corpus_size >= opts.libfuzzer_auto_reduce_min:
                     corpus_auto_reduce_threshold = int(
                         corpus_size * (1 + corpus_auto_reduce_ratio)
@@ -610,22 +531,23 @@ def libfuzzer_main(opts, collector, s3m):
                 continue
 
             if opts.stats:
-                stats["corpus_size"] = corpus_size
+                stats.fields["corpus_size"].update(corpus_size)
                 if corpus_auto_reduce_threshold is not None:
-                    stats["next_auto_reduce"] = corpus_auto_reduce_threshold
+                    stats.fields["next_auto_reduce"].update(
+                        corpus_auto_reduce_threshold
+                    )
 
-                write_aggregated_stats_libfuzzer(opts.stats, stats, monitors, [])
+                stats.update_and_write(opts.stats, monitors, [])
 
             # Only upload new corpus files every 2 hours or after corpus reduction
             if opts.s3_queue_upload and (
                 corpus_reduction_done or last_queue_upload < int(time()) - 7200
             ):
-                s3m.upload_libfuzzer_queue_dir(
-                    str(base_dir), str(corpus_dir), original_corpus
-                )
+                assert s3m is not None
+                s3m.upload_libfuzzer_queue_dir(base_dir, corpus_dir, original_corpus)
 
                 # Pull down queue files from other queues directly into the corpus
-                s3m.download_libfuzzer_queues(str(corpus_dir))
+                s3m.download_libfuzzer_queues(corpus_dir)
 
                 last_queue_upload = int(time())
                 corpus_reduction_done = False
@@ -635,7 +557,9 @@ def libfuzzer_main(opts, collector, s3m):
             except Empty:
                 continue
 
+            assert result is not None
             monitor = monitors[result]
+            assert monitor is not None
             monitor.join(20)
             if monitor.is_alive():
                 raise RuntimeError(
@@ -651,7 +575,9 @@ def libfuzzer_main(opts, collector, s3m):
 
             if opts.stats:
                 # Make sure the execs that this monitor did survive in stats
-                stats["execs_done"] += monitor.execs_done
+                cast(SumField, stats.fields["execs_done"]).add_to_base(
+                    monitor.execs_done
+                )
 
             print(f"Job {result} terminated, processing results...", file=sys.stderr)
 
@@ -669,7 +595,7 @@ def libfuzzer_main(opts, collector, s3m):
             # libFuzzer can exit due to OOM with and without a testcase.
             # The case of having an OOM with a testcase is handled further below.
             if not testcase and monitor.had_oom:
-                stats["ooms"] += 1
+                stats.fields["ooms"] += 1  # type: ignore
                 continue
 
             # Don't bother sending stuff to the server with neither trace nor
@@ -710,19 +636,18 @@ def libfuzzer_main(opts, collector, s3m):
                 if testcase_name.startswith("slow-unit-"):
                     continue
                 if testcase_name.startswith("oom-"):
-                    stats["ooms"] += 1
+                    stats.fields["ooms"] += 1  # type: ignore
                     continue
                 if testcase_name.startswith("timeout-"):
-                    stats["timeouts"] += 1
+                    stats.fields["timeouts"] += 1  # type: ignore
                     continue
 
-            stats["crashes"] += 1
+            stats.fields["crashes"] += 1  # type: ignore
 
             if int(time()) - crashes_per_minute_interval > 60:
                 crashes_per_minute_interval = int(time())
                 crashes_per_minute = 0
             crashes_per_minute += 1
-            stats["crashes_per_minute"] = crashes_per_minute
 
             if crashes_per_minute >= 10:
                 print("Too many frequent crashes, exiting...", file=sys.stderr)
@@ -732,9 +657,7 @@ def libfuzzer_main(opts, collector, s3m):
                     # see when fuzzing has become impossible due to excessive
                     # crashes.
                     warning = "Fuzzing terminated due to excessive crashes."
-                    write_aggregated_stats_libfuzzer(
-                        opts.stats, stats, monitors, [warning]
-                    )
+                    stats.update_and_write(opts.stats, monitors, [warning])
                 break
 
             if not monitor.inited:
@@ -744,17 +667,16 @@ def libfuzzer_main(opts, collector, s3m):
                     # see when fuzzing has become impossible due to excessive
                     # crashes.
                     warning = "Fuzzing did not startup correctly."
-                    write_aggregated_stats_libfuzzer(
-                        opts.stats, stats, monitors, [warning]
-                    )
+                    stats.update_and_write(opts.stats, monitors, [warning])
                 return 2
 
             if opts.transform:
                 # If a transformation script was supplied, update the testcase path
                 # to point to the archive which includes both, the original and
                 # updated testcases
+                assert testcase is not None
                 try:
-                    testcase = Path(apply_transform(opts.transform, testcase))
+                    testcase = apply_transform(opts.transform, testcase)
                 except Exception as exc:  # pylint: disable=broad-except
                     print(exc.args[1], file=sys.stderr)
 
@@ -762,6 +684,7 @@ def libfuzzer_main(opts, collector, s3m):
             # continue after each crash
             if not opts.fuzzmanager:
                 continue
+            assert collector is not None
 
             crash_info = CrashInfo.fromRawCrashData(
                 [], stderr, configuration, auxCrashData=trace
