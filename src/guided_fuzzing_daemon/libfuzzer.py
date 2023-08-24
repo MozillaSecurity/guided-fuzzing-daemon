@@ -563,7 +563,7 @@ def libfuzzer_main(
             monitor.join(20)
             if monitor.is_alive():
                 raise RuntimeError(
-                    f"Monitor {result} still alive although it signaled " "termination."
+                    f"Monitor {result} still alive although it signaled termination."
                 )
 
             # Monitor is dead, mark it for restarts

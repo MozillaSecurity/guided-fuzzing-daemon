@@ -29,7 +29,7 @@ from guided_fuzzing_daemon.args import parse_args
 def test_args_01(args, msg, capsys):
     """incomplete and invalid args"""
     with pytest.raises(SystemExit):
-        parse_args(["gfd"] + args)
+        parse_args(["gfd", *args])
     stdio = capsys.readouterr()
     assert msg in stdio.err
 
@@ -69,7 +69,7 @@ def test_args_03(args, msg, capsys, mocker):
     """misc aflfuzz args"""
     mocker.patch("guided_fuzzing_daemon.args.HAVE_FFPUPPET", True)
     with pytest.raises(SystemExit):
-        parse_args(["gfd", "--aflfuzz"] + args)
+        parse_args(["gfd", "--aflfuzz", *args])
     stdio = capsys.readouterr()
     assert msg in stdio.err
 
