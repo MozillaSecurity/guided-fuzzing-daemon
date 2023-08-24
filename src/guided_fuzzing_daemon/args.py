@@ -3,13 +3,14 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 import argparse
 import sys
+from argparse import Namespace
 from pathlib import Path
-from time import sleep
+from typing import List, Optional
 
 from .utils import HAVE_FFPUPPET
 
 
-def parse_args(argv=None):
+def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     if argv is None:
         argv = sys.argv.copy()  # pragma: no cover
 
@@ -89,11 +90,13 @@ def parse_args(argv=None):
     )
     main_group.add_argument(
         "--stats",
+        type=Path,
         help="Collect aggregated statistics in specified file",
         metavar="FILE",
     )
     main_group.add_argument(
         "--transform",
+        type=Path,
         help="Apply post crash transformation to the testcase",
         metavar="FILE",
     )
@@ -115,11 +118,13 @@ def parse_args(argv=None):
     )
     s3_group.add_argument(
         "--s3-build-download",
+        type=Path,
         help="Use S3 to download the build for the specified project",
         metavar="DIR",
     )
     s3_group.add_argument(
         "--s3-build-upload",
+        type=Path,
         help="Use S3 to upload a new build for the specified project",
         metavar="FILE",
     )
@@ -137,6 +142,7 @@ def parse_args(argv=None):
     )
     s3_group.add_argument(
         "--s3-corpus-upload",
+        type=Path,
         help="Use S3 to upload a test corpus for the specified project",
         metavar="DIR",
     )
@@ -150,6 +156,7 @@ def parse_args(argv=None):
     )
     s3_group.add_argument(
         "--s3-corpus-refresh",
+        type=Path,
         help=(
             "Download queues and corpus from S3, combine and minimize, then re-upload."
         ),
@@ -172,6 +179,7 @@ def parse_args(argv=None):
     )
     s3_group.add_argument(
         "--build",
+        type=Path,
         help=(
             "Local build directory to use during corpus refresh instead of downloading."
         ),
@@ -240,6 +248,7 @@ def parse_args(argv=None):
 
     fm_group.add_argument(
         "--custom-cmdline-file",
+        type=Path,
         help="Path to custom cmdline file",
         metavar="FILE",
     )
@@ -261,6 +270,7 @@ def parse_args(argv=None):
     )
     fm_group.add_argument(
         "--serverauthtokenfile",
+        type=Path,
         help="File containing the server authentication token",
         metavar="FILE",
     )
@@ -305,6 +315,7 @@ def parse_args(argv=None):
 
     afl_group.add_argument(
         "--test-file",
+        type=Path,
         help="Optional path to copy the test file to before reproducing",
         metavar="FILE",
     )
@@ -322,6 +333,7 @@ def parse_args(argv=None):
     )
     afl_group.add_argument(
         "--firefox-prefs",
+        type=Path,
         help="Path to prefs.js file for Firefox",
         metavar="FILE",
     )
@@ -334,11 +346,13 @@ def parse_args(argv=None):
     )
     afl_group.add_argument(
         "--firefox-testpath",
+        type=Path,
         help="Path to file to open with Firefox",
         metavar="FILE",
     )
     afl_group.add_argument(
         "--firefox-start-afl",
+        type=Path,
         metavar="FILE",
         help=(
             "Start AFL with the given Firefox binary, remaining arguments being "
@@ -347,26 +361,23 @@ def parse_args(argv=None):
     )
     afl_group.add_argument(
         "--env-file",
+        type=Path,
         help="Path to a file with additional environment variables",
         metavar="FILE",
     )
     afl_group.add_argument(
         "--afl-output-dir",
+        type=Path,
         dest="afloutdir",
         help="Path to the AFL output directory to manage",
         metavar="DIR",
     )
     afl_group.add_argument(
         "--afl-binary-dir",
+        type=Path,
         dest="aflbindir",
         help="Path to the AFL binary directory to use",
         metavar="DIR",
-    )
-    afl_group.add_argument(
-        "--afl-stats",
-        dest="aflstats",
-        help="Deprecated, use --stats instead",
-        metavar="FILE",
     )
     afl_group.add_argument("rargs", nargs=argparse.REMAINDER)
 
@@ -382,13 +393,7 @@ def parse_args(argv=None):
 
     opts = parser.parse_args(argv)
 
-    if opts.aflstats:
-        print(
-            "warning: --afl-stats is unsupported, use --stats instead.", file=sys.stderr
-        )
-        sleep(2)
-
-    if opts.transform and not Path(opts.transform).is_file():
+    if opts.transform and not opts.transform.is_file():
         parser.error(f"Failed to locate transformation script {opts.transform}")
 
     s3_main = (

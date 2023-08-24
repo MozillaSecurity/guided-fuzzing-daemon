@@ -1,3 +1,4 @@
+# type: ignore
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -10,8 +11,8 @@ import pytest
 
 from guided_fuzzing_daemon.libfuzzer import (
     LibFuzzerMonitor,
+    LibFuzzerStats,
     libfuzzer_main,
-    write_aggregated_stats_libfuzzer,
 )
 from guided_fuzzing_daemon.s3 import S3Manager
 
@@ -24,9 +25,7 @@ def test_libfuzzer_01(mocker, tmp_path):
     mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
     mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
     mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    writer = mocker.patch(
-        "guided_fuzzing_daemon.libfuzzer.write_aggregated_stats_libfuzzer"
-    )
+    writer = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
     monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
     mocker.patch("os.environ", {"genv1": "gval1"})
     monitor.return_value.is_alive.return_value = False
@@ -54,7 +53,7 @@ def test_libfuzzer_01(mocker, tmp_path):
     assert libfuzzer_main(args, collector, s3m) == 0
     assert monitor.call_count == 1
     assert queue.return_value.get.call_count == 2
-    assert writer.call_count == 0
+    assert writer.update_and_write.call_count == 0
     cfg_inst = cfg.fromBinary.return_value
     assert cfg_inst.addEnvironmentVariables.call_args_list == [
         mocker.call({"env1": "val1", "env2": "val2"})
@@ -79,7 +78,7 @@ def test_libfuzzer_02(mocker, tmp_path):
     mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
     mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
     mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.write_aggregated_stats_libfuzzer")
+    mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
     monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
     monitor.return_value.is_alive.return_value = False
     monitor.return_value.inited = True
@@ -116,7 +115,7 @@ def test_libfuzzer_03(mocker, tmp_path):
     mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
     mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
     mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.write_aggregated_stats_libfuzzer")
+    mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
     monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
     monitor.return_value.is_alive.return_value = False
     monitor.return_value.inited = True
@@ -154,9 +153,7 @@ def test_libfuzzer_04(mocker, tmp_path):
     mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
     mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
     mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    writer = mocker.patch(
-        "guided_fuzzing_daemon.libfuzzer.write_aggregated_stats_libfuzzer"
-    )
+    writer = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
     monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
     monitor.return_value.is_alive.return_value = False
     monitor.return_value.inited = True
@@ -196,7 +193,7 @@ def test_libfuzzer_05(mocker, tmp_path, capsys):
     mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
     asan_test = mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
     mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.write_aggregated_stats_libfuzzer")
+    mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
     monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
     monitor.return_value.is_alive.return_value = False
     monitor.return_value.inited = True
@@ -271,7 +268,7 @@ def test_libfuzzer_monitor_02(mocker):
     err = Exception("123")
     proc = mocker.Mock()
     proc.stderr.readline.side_effect = err
-    mon = LibFuzzerMonitor(proc)
+    mon = LibFuzzerMonitor(proc, 0, mocker.Mock())
     mon.run()
     assert mon.exc is err
 
@@ -288,7 +285,7 @@ def test_libfuzzer_monitor_03(mocker, evt):
         "#701 NEW_PC: 0x",
         "",
     ]
-    mon = LibFuzzerMonitor(proc)
+    mon = LibFuzzerMonitor(proc, 0, mocker.Mock())
     mon.run()
     assert mon.get_stderr() == [
         f"#700 {evt} cov: 123 exec/s: 5 rss: 16Mb ft: 12",
@@ -324,7 +321,7 @@ def test_libfuzzer_monitor_04(mocker):
         "non-crash data",
         "",
     ]
-    mon = LibFuzzerMonitor(proc)
+    mon = LibFuzzerMonitor(proc, 0, mocker.Mock())
     mon.run()
     assert mon.get_stderr() == ["==ABORTING", "non-crash data"]
     assert mon.get_testcase() is None
@@ -347,7 +344,7 @@ def test_libfuzzer_monitor_05(mocker, tmp_path):
         "==AddressSanitizer: Thread limit",
         "",
     ]
-    mon = LibFuzzerMonitor(proc)
+    mon = LibFuzzerMonitor(proc, 0, mocker.Mock())
     mon.run()
     assert mon.get_stderr() == [
         f"Test unit written to {testcase}",
@@ -366,7 +363,7 @@ def test_libfuzzer_monitor_06(mocker, kill_on_oom):
     """libfuzzer monitor kill on oom honoured"""
     proc = mocker.Mock()
     proc.stderr.readline.side_effect = ["ERROR: libFuzzer: out-of-memory", ""]
-    mon = LibFuzzerMonitor(proc, kill_on_oom=kill_on_oom)
+    mon = LibFuzzerMonitor(proc, 0, mocker.Mock(), kill_on_oom=kill_on_oom)
     mon.run()
     assert mon.get_stderr() == ["ERROR: libFuzzer: out-of-memory"]
     assert not mon.get_asan_trace()
@@ -379,7 +376,7 @@ def test_libfuzzer_monitor_07(mocker):
     """libfuzzer monitor terminate"""
     sleep = mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
     proc = mocker.Mock()
-    mon = LibFuzzerMonitor(proc)
+    mon = LibFuzzerMonitor(proc, 0, mocker.Mock())
     proc.poll.return_value = None
     mon.terminate()
     assert proc.terminate.call_count == 1
@@ -404,18 +401,16 @@ def test_libfuzzer_stats_01(mocker):
     outf = mocker.Mock()
     warns = mocker.Mock()
 
-    global_stats = {
-        "corpus_size": 500,
-        "next_auto_reduce": 1000,
-        "crashes": 12,
-        "timeouts": 50,
-        "ooms": 3333,
-        "execs_done": 100,
-        "last_new": 0,
-        "last_new_pc": 0,
-    }
+    mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats.add_sys_stats")
+    stats = LibFuzzerStats()
+    stats.fields["corpus_size"].update(500)
+    stats.fields["next_auto_reduce"].update(1000)
+    stats.fields["crashes"].update(12)
+    stats.fields["timeouts"].update(50)
+    stats.fields["ooms"].update(3333)
+    stats.fields["execs_done"].add_to_base(100)
 
-    mon1 = LibFuzzerMonitor(mocker.Mock())
+    mon1 = LibFuzzerMonitor(mocker.Mock(), 0, mocker.Mock())
     mon1.cov = 10
     mon1.feat = 20
     mon1.execs_done = 30
@@ -424,7 +419,7 @@ def test_libfuzzer_stats_01(mocker):
     mon1.last_new = 60
     mon1.last_new_pc = 70
 
-    mon2 = LibFuzzerMonitor(mocker.Mock())
+    mon2 = LibFuzzerMonitor(mocker.Mock(), 0, mocker.Mock())
     mon2.cov = 5
     mon2.feat = 15
     mon2.execs_done = 25
@@ -435,84 +430,37 @@ def test_libfuzzer_stats_01(mocker):
 
     monitors = [mon1, mon2]
 
-    write_stats = mocker.patch("guided_fuzzing_daemon.libfuzzer.write_stats_file")
-    write_aggregated_stats_libfuzzer(outf, global_stats, monitors, warns)
-    assert write_stats.call_args_list == [
-        mocker.call(
-            outf,
-            [
-                "execs_done",
-                "execs_per_sec",
-                "rss_mb",
-                "corpus_size",
-                "next_auto_reduce",
-                "crashes/timeouts/ooms",
-                "cov",
-                "feat",
-                "last_new",
-                "last_new_pc",
-            ],
-            {
-                "cov": "5-10 min/max",
-                "feat": "15-20 min/max",
-                "execs_done": 155,
-                "execs_per_sec": "75 total (35-40 min/max)",
-                "rss_mb": "95 total (45-50 min/max)",
-                "corpus_size": 500,
-                "next_auto_reduce": 1000,
-                "crashes": 12,
-                "timeouts": 50,
-                "ooms": 3333,
-                "crashes/timeouts/ooms": "12, 50, 3333",
-                "last_new": "1970-01-01T00:01:00Z",
-                "last_new_pc": "1970-01-01T00:01:10Z",
-            },
-            warns,
-        )
-    ]
-    assert global_stats == {
-        "corpus_size": 500,
-        "next_auto_reduce": 1000,
-        "crashes": 12,
-        "timeouts": 50,
-        "ooms": 3333,
-        "execs_done": 100,
-        "last_new": 60,
-        "last_new_pc": 70,
-    }
-    global_stats["last_new"] = 100
-    write_stats.reset_mock()
-    write_aggregated_stats_libfuzzer(outf, global_stats, monitors, warns)
-    assert write_stats.call_args_list == [
-        mocker.call(
-            outf,
-            [
-                "execs_done",
-                "execs_per_sec",
-                "rss_mb",
-                "corpus_size",
-                "next_auto_reduce",
-                "crashes/timeouts/ooms",
-                "cov",
-                "feat",
-                "last_new",
-                "last_new_pc",
-            ],
-            {
-                "cov": "5-10 min/max",
-                "feat": "15-20 min/max",
-                "execs_done": 155,
-                "execs_per_sec": "75 total (35-40 min/max)",
-                "rss_mb": "95 total (45-50 min/max)",
-                "corpus_size": 500,
-                "next_auto_reduce": 1000,
-                "crashes": 12,
-                "timeouts": 50,
-                "ooms": 3333,
-                "crashes/timeouts/ooms": "12, 50, 3333",
-                "last_new": "1970-01-01T00:01:40Z",
-                "last_new_pc": "1970-01-01T00:01:10Z",
-            },
-            warns,
-        )
-    ]
+    stats.write_file = mocker.Mock()
+    stats.update_and_write(outf, monitors, warns)
+    assert stats.write_file.call_args_list == [mocker.call(outf, warns)]
+    assert str(stats.fields["cov"]) == "5-10 min/max"
+    assert str(stats.fields["feat"]) == "15-20 min/max"
+    assert str(stats.fields["execs_done"]) == "155"
+    assert str(stats.fields["execs_per_sec"]) == "75 total (35-40 min/max)"
+    assert str(stats.fields["rss_mb"]) == "95 total (45-50 min/max)"
+    assert str(stats.fields["corpus_size"]) == "500"
+    assert str(stats.fields["next_auto_reduce"]) == "1000"
+    assert str(stats.fields["crashes"]) == "12"
+    assert str(stats.fields["timeouts"]) == "50"
+    assert str(stats.fields["ooms"]) == "3333"
+    assert str(stats.fields["crashes/timeouts/ooms"]) == "12, 50, 3333"
+    assert str(stats.fields["last_new"]) == "1970-01-01T00:01:00Z"
+    assert str(stats.fields["last_new_pc"]) == "1970-01-01T00:01:10Z"
+
+    stats.fields["last_new"].update(100)
+    stats.write_file.reset_mock()
+    stats.update_and_write(outf, monitors, warns)
+    assert stats.write_file.call_args_list == [mocker.call(outf, warns)]
+    assert str(stats.fields["cov"]) == "5-10 min/max"
+    assert str(stats.fields["feat"]) == "15-20 min/max"
+    assert str(stats.fields["execs_done"]) == "155"
+    assert str(stats.fields["execs_per_sec"]) == "75 total (35-40 min/max)"
+    assert str(stats.fields["rss_mb"]) == "95 total (45-50 min/max)"
+    assert str(stats.fields["corpus_size"]) == "500"
+    assert str(stats.fields["next_auto_reduce"]) == "1000"
+    assert str(stats.fields["crashes"]) == "12"
+    assert str(stats.fields["timeouts"]) == "50"
+    assert str(stats.fields["ooms"]) == "3333"
+    assert str(stats.fields["crashes/timeouts/ooms"]) == "12, 50, 3333"
+    assert str(stats.fields["last_new"]) == "1970-01-01T00:01:40Z"
+    assert str(stats.fields["last_new_pc"]) == "1970-01-01T00:01:10Z"

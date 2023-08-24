@@ -1,3 +1,4 @@
+# type: ignore
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
@@ -33,15 +34,7 @@ def test_args_01(args, msg, capsys):
     assert msg in stdio.err
 
 
-def test_args_02(capsys, mocker, tmp_path):
-    """unsupported afl-stats"""
-    mocker.patch("guided_fuzzing_daemon.args.sleep")
-    parse_args(["gfd", "--aflfuzz", "--afl-stats", str(tmp_path / "nx")])
-    stdio = capsys.readouterr()
-    assert "--afl-stats is unsupported" in stdio.err
-
-
-def test_args_03(capsys, tmp_path):
+def test_args_02(capsys, tmp_path):
     """missing transformation script"""
     with pytest.raises(SystemExit):
         parse_args(["gfd", "--transform", str(tmp_path / "nx")])
@@ -72,7 +65,7 @@ def test_args_03(capsys, tmp_path):
         ),
     ),
 )
-def test_args_04(args, msg, capsys, mocker):
+def test_args_03(args, msg, capsys, mocker):
     """misc aflfuzz args"""
     mocker.patch("guided_fuzzing_daemon.args.HAVE_FFPUPPET", True)
     with pytest.raises(SystemExit):
@@ -81,7 +74,7 @@ def test_args_04(args, msg, capsys, mocker):
     assert msg in stdio.err
 
 
-def test_args_05(capsys, tmp_path):
+def test_args_04(capsys, tmp_path):
     """misc nyx args"""
     with pytest.raises(SystemExit):
         parse_args(["gfd", "--nyx", f"--spec-fuzzer={tmp_path}"])
@@ -89,7 +82,7 @@ def test_args_05(capsys, tmp_path):
     assert "Must specify --sharedir" in stdio.err
 
 
-def test_args_06():
+def test_args_05():
     """libfuzzer does not need args when doing s3 actions"""
     parse_args(
         [

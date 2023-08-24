@@ -6,29 +6,28 @@ import subprocess
 import sys
 import time
 import traceback
+from argparse import Namespace
 from pathlib import Path
+from typing import List, Optional, Tuple, Union
 
+from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Running.AutoRunner import AutoRunner
 
-from .utils import (
-    HAVE_FFPUPPET,
-    apply_transform,
-    setup_firefox,
-    warn_local,
-    write_stats_file,
-)
+from .s3 import S3Manager
+from .stats import ListField, MaxTimeField, MeanField, StatAggregator, SumField
+from .utils import HAVE_FFPUPPET, apply_transform, setup_firefox, warn_local
 
 
-def command_file_to_list(cmd_file):
+def command_file_to_list(cmd_file: Path) -> Tuple[Optional[int], List[str]]:
     """
     Open and parse custom command line file
 
-    @type cmd_file: String
-    @param cmd_file: Command line file containing list of commands
+    Args:
+        cmd_file: Command line file containing list of commands
 
-    @rtype: Tuple
-    @return: Test index in list and the command as a list of strings
+    Returns:
+        Test index in list and the command as a list of strings
     """
     cmdline = []
     idx = 0
@@ -44,42 +43,33 @@ def command_file_to_list(cmd_file):
 
 
 def scan_crashes(
-    base_dir,
-    collector,
-    cmdline_path=None,
-    env_path=None,
-    test_path=None,
-    firefox=None,
-    firefox_prefs=None,
-    firefox_extensions=None,
-    firefox_testpath=None,
-    transform=None,
-):
+    base_dir: Path,
+    collector: Collector,
+    cmdline_path: Optional[Path] = None,
+    env_path: Optional[Path] = None,
+    test_path: Optional[Path] = None,
+    firefox: bool = False,
+    firefox_prefs: Optional[Path] = None,
+    firefox_extensions: Optional[List[Path]] = None,
+    firefox_testpath: Optional[Path] = None,
+    transform: Optional[Path] = None,
+) -> None:
+    """Scan the base directory for crash tests and submit them to FuzzManager.
+
+    Args:
+        base_dir: AFL base directory
+        cmdline_path: Optional command line file to use instead of the
+                      one found inside the base directory.
+        env_path: Optional file containing environment variables.
+        test_path: Optional filename where to copy the test before
+                   attempting to reproduce a crash.
+        transform: Optional path to script for applying post-crash
+                   transformations.
+
+    Returns:
+        Non-zero return code on failure
     """
-    Scan the base directory for crash tests and submit them to FuzzManager.
-
-    @type base_dir: String
-    @param base_dir: AFL base directory
-
-    @type cmdline_path: String
-    @param cmdline_path: Optional command line file to use instead of the
-                         one found inside the base directory.
-
-    @type env_path: String
-    @param env_path: Optional file containing environment variables.
-
-    @type test_path: String
-    @param test_path: Optional filename where to copy the test before
-                      attempting to reproduce a crash.
-
-    @type transform: String
-    @param transform: Optional path to script for applying post-crash
-                      transformations.
-
-    @rtype: int
-    @return: Non-zero return code on failure
-    """
-    crash_dir = Path(base_dir) / "crashes"
+    crash_dir = base_dir / "crashes"
     crash_files = []
 
     for crash_path in crash_dir.iterdir():
@@ -114,7 +104,7 @@ def scan_crashes(
                         test_in_env = name
 
         if not cmdline_path:
-            cmdline_path = Path(base_dir) / "cmdline"
+            cmdline_path = base_dir / "cmdline"
 
         test_idx, cmdline = command_file_to_list(cmdline_path)
         if test_idx is not None:
@@ -128,15 +118,20 @@ def scan_crashes(
             )
 
         if firefox:
+            assert firefox_prefs is not None
+            assert firefox_testpath is not None
             (ffp, ff_cmd, ff_env) = setup_firefox(
-                cmdline[0], firefox_prefs, firefox_extensions, firefox_testpath
+                Path(cmdline[0]),
+                firefox_prefs,
+                firefox_extensions or [],
+                firefox_testpath,
             )
             cmdline = ff_cmd
             base_env.update(ff_env)
 
         for crash_file in crash_files:
             stdin = None
-            env = None
+            env = {}
 
             if base_env:
                 env = dict(base_env)
@@ -144,7 +139,7 @@ def scan_crashes(
             submission = crash_file
             if transform:
                 try:
-                    submission = Path(apply_transform(transform, crash_file))
+                    submission = apply_transform(transform, crash_file)
                 except Exception as exc:  # pylint: disable=broad-except
                     print(exc.args[1], file=sys.stderr)
 
@@ -178,139 +173,113 @@ def scan_crashes(
             ffp.clean_up()
 
 
-def write_aggregated_stats_afl(base_dirs, outfile, cmdline_path=None):
-    """
-    Generate aggregated statistics from the given base directories
-    and write them to the specified output file.
+class AFLStats(StatAggregator):
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_field("execs_done", SumField())
+        self.add_field("execs_per_sec", SumField())
+        self.add_field("pending_favs", SumField())
+        self.add_field("pending_total", SumField())
+        self.add_field("variable_paths", SumField())
+        self.add_field("unique_crashes", SumField())
+        self.add_field("unique_hangs", SumField())
+        self.add_field("exec_timeout", MeanField())
+        self.add_field("cycles_done", ListField())
+        self.add_field("bitmap_cvg", ListField())
+        self.add_field("last_path", MaxTimeField())
+        self.add_sys_stats()
 
-    @type base_dirs: list
-    @param base_dirs: List of AFL base directories
+    def update_and_write(
+        self,
+        outfile: Path,
+        base_dirs: List[Path],
+        cmdline_path: Optional[Path] = None,
+    ) -> None:
+        """Generate aggregated statistics from the given base directories
+        and write them to the specified output file.
 
-    @type outfile: str
-    @param outfile: Output file for aggregated statistics
+        Args:
+            outfile: Output file for aggregated statistics
+            base_dirs: List of AFL base directories
+            cmdline_path: Optional command line file to use instead of the
+                          one found inside the base directory.
+        """
+        self.reset()
+        do_not_convert = {"cycles_done", "bitmap_cvg"}
+        renames = {"last_find": "last_path"}
 
-    @type cmdline_path: String
-    @param cmdline_path: Optional command line file to use instead of the
-                         one found inside the base directory.
-    """
+        # Warnings to include
+        warnings = []
 
-    # Which fields to add
-    wanted_fields_total = [
-        "execs_done",
-        "execs_per_sec",
-        "pending_favs",
-        "pending_total",
-        "variable_paths",
-        "unique_crashes",
-        "unique_hangs",
-    ]
+        any_stat = False
 
-    # Which fields to aggregate by mean
-    wanted_fields_mean = ["exec_timeout"]
+        def convert_num(num: str) -> Union[float, int]:
+            if "." in num:
+                return float(num)
+            return int(num)
 
-    # Which fields should be displayed per fuzzer instance
-    wanted_fields_all = ["cycles_done", "bitmap_cvg"]
+        for base_dir in base_dirs:
+            stats_path = base_dir / "fuzzer_stats"
 
-    # Which fields should be aggregated by max
-    wanted_fields_max = ["last_path"]
+            if not cmdline_path:
+                cmdline_path = base_dir / "cmdline"
 
-    # Generate total list of fields to write
-    fields = []
-    fields.extend(wanted_fields_total)
-    fields.extend(wanted_fields_mean)
-    fields.extend(wanted_fields_all)
-    fields.extend(wanted_fields_max)
+            if stats_path.exists():
+                stats = stats_path.read_text()
 
-    # Warnings to include
-    warnings = []
+                for line in stats.splitlines():
+                    (field_name, field_val) = line.split(":", 1)
+                    field_name = field_name.strip()
+                    field_val = field_val.strip()
 
-    aggregated_stats = {}
+                    field_name = renames.get(field_name, field_name)
 
-    for field in wanted_fields_total:
-        aggregated_stats[field] = 0
+                    if field_name not in self.fields:
+                        continue
 
-    for field in wanted_fields_mean:
-        aggregated_stats[field] = (0, 0)
+                    if field_name in do_not_convert:
+                        self.fields[field_name].update(field_val)
+                    else:
+                        self.fields[field_name].update(convert_num(field_val))
 
-    for field in wanted_fields_all:
-        aggregated_stats[field] = []
+                    any_stat = True
 
-    def convert_num(num):
-        if "." in num:
-            return float(num)
-        return int(num)
+        # If we don't have any data here, then the fuzzers haven't written any
+        # statistics yet
+        if not any_stat:
+            return
 
-    for base_dir in base_dirs:
-        stats_path = Path(base_dir) / "fuzzer_stats"
+        # Verify fuzzmanagerconf exists and can be parsed
+        assert cmdline_path is not None
+        _, cmdline = command_file_to_list(cmdline_path)
+        target_binary = cmdline[0] if cmdline else None
 
-        if not cmdline_path:
-            cmdline_path = Path(base_dir) / "cmdline"
+        if target_binary is not None:
+            if not Path(f"{target_binary}.fuzzmanagerconf").is_file():
+                warnings.append(f"WARNING: Missing {target_binary}.fuzzmanagerconf\n")
+            elif ProgramConfiguration.fromBinary(target_binary) is None:
+                warnings.append(f"WARNING: Invalid {target_binary}.fuzzmanagerconf\n")
 
-        if stats_path.exists():
-            stats = stats_path.read_text()
+        # Look for unreported crashes
+        failed_reports = 0
+        for base_dir in base_dirs:
+            crashes_dir = base_dir / "crashes"
+            if not crashes_dir.is_dir():
+                continue
+            for crash_file in crashes_dir.iterdir():
+                if crash_file.suffix == ".failed":
+                    failed_reports += 1
+        if failed_reports:
+            warnings.append(
+                f"WARNING: Unreported crashes detected ({failed_reports})\n"
+            )
 
-            for line in stats.splitlines():
-                (field_name, field_val) = line.split(":", 1)
-                field_name = field_name.strip()
-                field_val = field_val.strip()
-
-                if field_name in wanted_fields_total:
-                    aggregated_stats[field_name] += convert_num(field_val)
-                elif field_name in wanted_fields_mean:
-                    (val, cnt) = aggregated_stats[field_name]
-                    aggregated_stats[field_name] = (
-                        val + convert_num(field_val),
-                        cnt + 1,
-                    )
-                elif field_name in wanted_fields_all:
-                    aggregated_stats[field_name].append(field_val)
-                elif field_name in wanted_fields_max:
-                    num_val = convert_num(field_val)
-                    if (field_name not in aggregated_stats) or aggregated_stats[
-                        field_name
-                    ] < num_val:
-                        aggregated_stats[field_name] = num_val
-
-    # If we don't have any data here, then the fuzzers haven't written any statistics
-    # yet
-    if not aggregated_stats:
-        return
-
-    # Mean conversion
-    for field_name in wanted_fields_mean:
-        (val, cnt) = aggregated_stats[field_name]
-        if cnt:
-            aggregated_stats[field_name] = float(val) / float(cnt)
-        else:
-            aggregated_stats[field_name] = val
-
-    # Verify fuzzmanagerconf exists and can be parsed
-    _, cmdline = command_file_to_list(cmdline_path)
-    target_binary = cmdline[0] if cmdline else None
-
-    if target_binary is not None:
-        if not Path(f"{target_binary}.fuzzmanagerconf").is_file():
-            warnings.append(f"WARNING: Missing {target_binary}.fuzzmanagerconf\n")
-        elif ProgramConfiguration.fromBinary(target_binary) is None:
-            warnings.append(f"WARNING: Invalid {target_binary}.fuzzmanagerconf\n")
-
-    # Look for unreported crashes
-    failed_reports = 0
-    for base_dir in base_dirs:
-        crashes_dir = Path(base_dir) / "crashes"
-        if not crashes_dir.is_dir():
-            continue
-        for crash_file in crashes_dir.iterdir():
-            if crash_file.suffix == ".failed":
-                failed_reports += 1
-    if failed_reports:
-        warnings.append(f"WARNING: Unreported crashes detected ({failed_reports})\n")
-
-    # Write out data
-    write_stats_file(outfile, fields, aggregated_stats, warnings)
+        self.write_file(outfile, warnings)
 
 
-def aflfuzz_main(opts, collector, s3m):
+def aflfuzz_main(
+    opts: Namespace, collector: Optional[Collector], s3m: Optional[S3Manager]
+) -> int:
     assert not opts.cmd or opts.firefox
 
     if opts.firefox or opts.firefox_start_afl:
@@ -328,7 +297,7 @@ def aflfuzz_main(opts, collector, s3m):
             opts.firefox_testpath,
         )
 
-        afl_cmd = [str(Path(opts.aflbindir) / "afl-fuzz")]
+        afl_cmd = [str(opts.aflbindir / "afl-fuzz")]
 
         opts.rargs.remove("--")
 
@@ -345,13 +314,13 @@ def aflfuzz_main(opts, collector, s3m):
 
     afl_out_dirs = []
     if opts.afloutdir:
-        if not (Path(opts.afloutdir) / "crashes").exists():
+        if not (opts.afloutdir / "crashes").exists():
             # The specified directory doesn't have a "crashes" sub directory.
             # Either the wrong directory was specified, or this is an AFL
             # multi-process synchronization directory. Try to figure this out here.
-            for sync_dir in Path(opts.afloutdir).iterdir():
+            for sync_dir in opts.afloutdir.iterdir():
                 if (sync_dir / "crashes").exists():
-                    afl_out_dirs.append(str(sync_dir))
+                    afl_out_dirs.append(sync_dir)
 
             if not afl_out_dirs:
                 print(
@@ -366,12 +335,14 @@ def aflfuzz_main(opts, collector, s3m):
     # Upload and FuzzManager modes require specifying the AFL directory
     assert not (opts.s3_queue_upload or opts.fuzzmanager) or opts.afloutdir
 
-    if opts.fuzzmanager or opts.s3_queue_upload or opts.aflstats:
+    if opts.fuzzmanager or opts.s3_queue_upload or opts.stats:
         last_queue_upload = 0
 
         # If we reach this point, we know that AFL will be running on this machine,
         # so do the local warning check
         warn_local(opts)
+
+        stats = AFLStats()
 
         while True:
             if opts.fuzzmanager:
@@ -386,14 +357,15 @@ def aflfuzz_main(opts, collector, s3m):
 
             # Only upload queue files every 20 minutes
             if opts.s3_queue_upload and last_queue_upload < int(time.time()) - 1200:
+                assert s3m is not None
                 for afl_out_dir in afl_out_dirs:
                     s3m.upload_afl_queue_dir(afl_out_dir, new_cov_only=True)
                 last_queue_upload = int(time.time())
 
-            if opts.stats or opts.aflstats:
-                write_aggregated_stats_afl(
+            if opts.stats:
+                stats.update_and_write(
+                    opts.stats,
                     afl_out_dirs,
-                    opts.aflstats,
                     cmdline_path=opts.custom_cmdline_file,
                 )
 
