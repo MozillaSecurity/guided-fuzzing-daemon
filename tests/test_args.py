@@ -15,7 +15,7 @@ from guided_fuzzing_daemon.args import parse_args
             ["--aflfuzz", "--firefox"], "require FFPuppet to be installed", id="afl"
         ),
         pytest.param(["--libfuzzer"], "No arguments", id="libfuzzer"),
-        pytest.param(["--nyx"], "specify --spec-fuzzer", id="nyx"),
+        pytest.param(["--nyx"], "specify --sharedir", id="nyx"),
         pytest.param(
             ["--libfuzzer-auto-reduce=0"], "Auto reduce threshold", id="lf-auto-reduce"
         ),
@@ -74,15 +74,7 @@ def test_args_03(args, msg, capsys, mocker):
     assert msg in stdio.err
 
 
-def test_args_04(capsys, tmp_path):
-    """misc nyx args"""
-    with pytest.raises(SystemExit):
-        parse_args(["gfd", "--nyx", f"--spec-fuzzer={tmp_path}"])
-    stdio = capsys.readouterr()
-    assert "Must specify --sharedir" in stdio.err
-
-
-def test_args_05():
+def test_args_04():
     """libfuzzer does not need args when doing s3 actions"""
     parse_args(
         [

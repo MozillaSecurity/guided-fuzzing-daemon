@@ -642,7 +642,35 @@ def s3_main(opts: Namespace) -> int:
             shutil.rmtree(str(updated_tests_dir))
         updated_tests_dir.mkdir()
 
-        if opts.mode == "aflfuzz":
+        if opts.mode == "nyx":
+            assert opts.aflbindir.is_dir()
+            assert opts.sharedir.is_dir()
+
+            # Run afl-cmin
+            afl_cmin = Path(opts.aflbindir) / "afl-cmin"
+            if not afl_cmin.exists():
+                print("error: Unable to locate afl-cmin binary.", file=sys.stderr)
+                return 2
+
+            afl_cmdline = [
+                str(afl_cmin),
+                "-e",
+                "-i",
+                str(queues_dir),
+                "-o",
+                str(updated_tests_dir),
+                "-t",
+                str(opts.afl_timeout),
+                "-m",
+                "none",
+                "-X",
+                str(opts.sharedir),
+            ]
+
+            print("Running afl-cmin")
+            run(afl_cmdline, stdout=None if opts.debug else DEVNULL, check=True)
+
+        elif opts.mode == "aflfuzz":
             assert opts.aflbindir
 
             # Run afl-cmin

@@ -240,10 +240,11 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         metavar="DIR",
     )
     nyx_group.add_argument(
-        "--spec-fuzzer",
-        help="Path to Spec-Fuzzer repository",
-        type=Path,
-        metavar="DIR",
+        "--nyx-instances",
+        type=int,
+        default=1,
+        help="Number of parallel Nyx instances to run",
+        metavar="COUNT",
     )
 
     fm_group.add_argument(
@@ -411,11 +412,12 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
             parser.error("Must specify both --s3-bucket and --project for S3 actions")
 
     if opts.mode == "nyx":
-        if not opts.spec_fuzzer or not opts.spec_fuzzer.is_dir():
-            parser.error("Must specify --spec-fuzzer with --nyx")
-
         if not opts.sharedir or not opts.sharedir.is_dir():
             parser.error("Must specify --sharedir with --nyx")
+        if not opts.aflbindir:
+            parser.error("Must specify --afl-binary-dir for Nyx mode")
+        if len(opts.rargs) != 2:
+            parser.error("Nyx mode expects positional args: CORPUS_IN CORPUS_OUT")
 
     if opts.mode == "libfuzzer" and not s3_main:
         if not opts.rargs:
