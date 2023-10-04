@@ -1,13 +1,30 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
-import argparse
+import re
 import sys
-from argparse import Namespace
+from argparse import REMAINDER, ArgumentParser, Namespace
 from pathlib import Path
 from typing import List, Optional
 
 from .utils import HAVE_FFPUPPET
+
+
+def _check_log_pattern(
+    instances: int, pattern: str, arg_name: str, parser: ArgumentParser
+) -> None:
+    if instances > 1 and pattern.count("%") != 1:
+        parser.error(f"{arg_name} expects exactly one %d pattern")
+    if (
+        "%" in pattern
+        and re.search(r"%[#0 +-]*\d*\.\d*[hlL]?[diouxX]", pattern) is None
+    ):
+        parser.error(f"{arg_name} %d pattern not recognized")
+        try:
+            if len({(pattern % (i,)) for i in range(1000)}) != 1000:
+                parser.error(f"{arg_name} does not produce distinct paths")
+        except TypeError as exc:
+            parser.error(f"{arg_name} is malformed: {exc}")
 
 
 def parse_args(argv: Optional[List[str]] = None) -> Namespace:
@@ -17,7 +34,7 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     program_name = Path(argv.pop(0)).name
 
     # setup argparser
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         usage=(
             f"{program_name} --libfuzzer or --nyx or --aflfuzz [OPTIONS] "
             "--cmd <COMMAND AND ARGUMENTS>"
@@ -246,6 +263,22 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         help="Number of parallel Nyx instances to run",
         metavar="COUNT",
     )
+    nyx_group.add_argument(
+        "--afl-log-pattern",
+        help="Redirect AFL logs to a separate path. Must contain %d pattern if "
+        "--nyx-instances > 1.",
+    )
+    nyx_group.add_argument(
+        "--nyx-log-pattern",
+        help="Write Nyx hprint logs to a separate path. Must contain %d pattern if "
+        "--nyx-instances > 1.",
+    )
+    nyx_group.add_argument(
+        "--nyx-async-corpus",
+        action="store_true",
+        help="Init AFL with a single random file from the corpus, and load the rest "
+        "after init in the main process only.",
+    )
 
     fm_group.add_argument(
         "--custom-cmdline-file",
@@ -380,7 +413,7 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         help="Path to the AFL binary directory to use",
         metavar="DIR",
     )
-    afl_group.add_argument("rargs", nargs=argparse.REMAINDER)
+    afl_group.add_argument("rargs", nargs=REMAINDER)
 
     if not argv:
         parser.print_help(sys.stderr)
@@ -418,6 +451,14 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
             parser.error("Must specify --afl-binary-dir for Nyx mode")
         if len(opts.rargs) != 2:
             parser.error("Nyx mode expects positional args: CORPUS_IN CORPUS_OUT")
+        if opts.nyx_log_pattern is not None:
+            _check_log_pattern(
+                opts.nyx_instances, opts.nyx_log_pattern, "--nyx-log-pattern", parser
+            )
+        if opts.afl_log_pattern is not None:
+            _check_log_pattern(
+                opts.nyx_instances, opts.afl_log_pattern, "--afl-log-pattern", parser
+            )
 
     if opts.mode == "libfuzzer" and not s3_main:
         if not opts.rargs:

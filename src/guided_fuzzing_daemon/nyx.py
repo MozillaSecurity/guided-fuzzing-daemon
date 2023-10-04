@@ -1,14 +1,16 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+import os
 import sys
 from argparse import Namespace
 from pathlib import Path
 from random import choice
-from shutil import which
+from shutil import copy, rmtree, which
 from subprocess import DEVNULL, PIPE, Popen, run
+from tempfile import mkdtemp
 from time import sleep, time
-from typing import List, Optional, Union
+from typing import List, Optional, TextIO, Union
 
 from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
@@ -128,14 +130,38 @@ def nyx_main(
     )
     if collector is not None:
         assert bin_config
+    stats = AFLStats()
+
+    # environment settings that apply to all instances
+    env = os.environ.copy()
+    env["AFL_NO_UI"] = "1"
 
     warn_local(opts)
 
-    stats = AFLStats()
-
     procs: List[Optional["Popen[str]"]] = [None] * opts.nyx_instances
+    open_files: List[TextIO] = []
+    printed_pos: List[int] = [0] * opts.nyx_instances
+
     afl_fuzz = opts.aflbindir / "afl-fuzz"
+    tmp_base = Path(mkdtemp(prefix="gfd-"))
     try:
+        for idx in range(opts.nyx_instances):
+            if opts.afl_log_pattern:
+                if "%" in opts.afl_log_pattern:
+                    # pylint: disable=consider-using-with
+                    open_files.append(
+                        open(opts.afl_log_pattern % (idx,), "w", encoding="utf-8")
+                    )
+                elif opts.nyx_log_pattern:
+                    # pylint: disable=consider-using-with
+                    open_files.append(open(opts.afl_log_pattern, "w", encoding="utf-8"))
+            else:
+                open_files.append((tmp_base / f"screen{idx}.log").open("w"))
+
+        seed = choice([inp for inp in corpus_in.iterdir() if inp.is_file()])
+        corpus_seed = tmp_base / "corpus_seed"
+        copy(seed, corpus_seed)
+
         while True:
             # check and restart subprocesses
             for idx, proc in enumerate(procs):
@@ -155,6 +181,19 @@ def nyx_main(
                         cmd = ["-S", str(idx), "-p", choice(POWER_SCHEDS)]
                     else:
                         cmd = ["-M", "0"]
+                        if opts.nyx_async_corpus:
+                            cmd.extend(("-F", str(corpus_in)))
+
+                    # environment settings that apply to this instance
+                    this_env = env.copy()
+                    if opts.nyx_async_corpus and not idx:
+                        this_env["AFL_IMPORT_FIRST"] = "1"
+                    if opts.nyx_log_pattern:
+                        if "%" in opts.nyx_log_pattern:
+                            this_env["AFL_NYX_LOG"] = opts.nyx_log_pattern % (idx,)
+                        elif opts.nyx_log_pattern:
+                            this_env["AFL_NYX_LOG"] = opts.nyx_log_pattern
+
                     # pylint: disable=consider-using-with
                     procs[idx] = Popen(
                         [
@@ -164,15 +203,29 @@ def nyx_main(
                             "-Y",
                             *cmd,
                             "-i",
-                            str(corpus_in),
+                            str(corpus_seed if opts.nyx_async_corpus else corpus_in),
                             "-o",
-                            str(corpus_out),
+                            str(corpus_out.resolve()),
                             "--",
                             str(opts.sharedir.resolve()),
                         ],
                         text=True,
+                        env=this_env,
+                        stderr=PIPE,
+                        stdout=open_files[idx],
                     )
                     last_afl_start = int(time())
+
+            # tee logs
+            for idx, file in enumerate(open_files):
+                with open(file.name, encoding="utf-8") as read_file:
+                    read_file.seek(printed_pos[idx])
+                    new_data = read_file.read()
+                new_data = new_data.rsplit("\n", 1)[0]
+                if new_data:
+                    printed_pos[idx] += len(new_data) + 1
+                    for line in new_data.splitlines():
+                        print(f"[{idx:<3d}]{line}")
 
             # submit any crashes
             for log in corpus_out.glob("*/crashes/*.log"):
@@ -237,7 +290,12 @@ def nyx_main(
                 proc.kill()
                 proc.wait()
 
+        for file in open_files:
+            file.close()
+
         if s3m and opts.s3_queue_upload:
             s3m.upload_afl_queue_dir(corpus_out / "0")
+
+        rmtree(tmp_base)
 
     return 0
