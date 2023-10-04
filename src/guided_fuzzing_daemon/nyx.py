@@ -1,29 +1,243 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
-import subprocess
+import sys
 from argparse import Namespace
-from typing import Optional
+from pathlib import Path
+from random import choice
+from shutil import which
+from subprocess import DEVNULL, PIPE, Popen, run
+from time import sleep, time
+from typing import List, Optional, Union
 
 from Collector.Collector import Collector
+from FTB.ProgramConfiguration import ProgramConfiguration
+from FTB.Signatures.CrashInfo import CrashInfo
 
 from .s3 import S3Manager
+from .stats import ListField, MaxTimeField, MeanField, StatAggregator, SumField
+from .utils import warn_local
+
+ASAN_SYMBOLIZE = which("asan_symbolize")
+POWER_SCHEDS = ("explore", "coe", "lin", "quad", "exploit", "rare")
+
+
+class AFLStats(StatAggregator):
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_field("execs_done", SumField())
+        self.add_field("execs_per_sec", SumField())
+        self.add_field("pending_favs", SumField())
+        self.add_field("pending_total", SumField())
+        self.add_field("corpus_variable", SumField())
+        self.add_field("saved_crashes", SumField())
+        self.add_field("saved_hangs", SumField())
+        self.add_field("exec_timeout", MeanField())
+        self.add_field("cycles_done", ListField())
+        self.add_field("bitmap_cvg", ListField())
+        self.add_field("last_find", MaxTimeField())
+        self.add_sys_stats()
+
+    def update_and_write(
+        self,
+        outfile: Path,
+        base_dirs: List[Path],
+    ) -> None:
+        """Generate aggregated statistics from the given base directories
+        and write them to the specified output file.
+
+        Args:
+            outfile: Output file for aggregated statistics
+            base_dirs: List of AFL base directories
+            cmdline_path: Optional command line file to use instead of the
+                          one found inside the base directory.
+        """
+        self.reset()
+        do_not_convert = {"cycles_done", "bitmap_cvg"}
+
+        # Warnings to include
+        warnings = []
+
+        any_stat = False
+
+        def convert_num(num: str) -> Union[float, int]:
+            if "." in num:
+                return float(num)
+            return int(num)
+
+        for base_dir in base_dirs:
+            stats_path = base_dir / "fuzzer_stats"
+
+            if stats_path.exists():
+                stats = stats_path.read_text()
+
+                for line in stats.splitlines():
+                    (field_name, field_val) = line.split(":", 1)
+                    field_name = field_name.strip()
+                    field_val = field_val.strip()
+
+                    if field_name not in self.fields:
+                        continue
+
+                    if field_name in do_not_convert:
+                        self.fields[field_name].update(field_val)
+                    else:
+                        self.fields[field_name].update(convert_num(field_val))
+
+                    any_stat = True
+
+        # If we don't have any data here, then the fuzzers haven't written any
+        # statistics yet
+        if not any_stat:
+            return
+
+        # Look for unreported crashes
+        failed_reports = 0
+        for base_dir in base_dirs:
+            crashes_dir = base_dir / "crashes"
+            if not crashes_dir.is_dir():
+                continue
+            for crash_file in crashes_dir.iterdir():
+                if crash_file.suffix == ".failed":
+                    failed_reports += 1
+        if failed_reports:
+            warnings.append(
+                f"WARNING: Unreported crashes detected ({failed_reports})\n"
+            )
+
+        self.write_file(outfile, warnings)
 
 
 def nyx_main(
-    opts: Namespace, _collector: Optional[Collector], _s3m: Optional[S3Manager]
+    opts: Namespace, collector: Optional[Collector], s3m: Optional[S3Manager]
 ) -> int:
-    assert opts.sharedir
-    assert opts.spec_fuzzer
+    assert opts.aflbindir.is_dir()
+    assert opts.sharedir.is_dir()
+    assert ASAN_SYMBOLIZE is not None
+    assert len(opts.rargs) == 2, "--nyx expects positional args: CORPUS_IN CORPUS_OUT"
+    corpus_in, corpus_out = map(Path, opts.rargs)
+    assert corpus_in.is_dir()
+    assert opts.nyx_instances >= 1
 
-    cargo_cmdline = [
-        "cargo",
-        "run",
-        "--release",
-        "--",
-        "-s",
-        str(opts.sharedir.resolve()),
-    ]
-    result = subprocess.run(cargo_cmdline, cwd=opts.spec_fuzzer)
+    corpus_out.mkdir(parents=True, exist_ok=True)
 
-    return result.returncode
+    last_queue_upload = int(time())
+    last_afl_start = 0
+    bin_config = ProgramConfiguration.fromBinary(
+        str(opts.sharedir / "firefox" / "firefox")
+    )
+    if collector is not None:
+        assert bin_config
+
+    warn_local(opts)
+
+    stats = AFLStats()
+
+    procs: List[Optional["Popen[str]"]] = [None] * opts.nyx_instances
+    afl_fuzz = opts.aflbindir / "afl-fuzz"
+    try:
+        while True:
+            # check and restart subprocesses
+            for idx, proc in enumerate(procs):
+                if proc and proc.poll() is not None:
+                    print(f"afl-fuzz returned early: {proc.wait()}", file=sys.stderr)
+                    procs[idx] = proc = None
+
+                if (
+                    proc is None
+                    # rate limit AFL++ instance launch to 1/minute
+                    and last_afl_start < time() - 60
+                    # don't launch secondary instances until main instance has finished
+                    # initializing
+                    and (not idx or (corpus_out / "0" / "fuzzer_stats").exists())
+                ):
+                    if idx:
+                        cmd = ["-S", str(idx), "-p", choice(POWER_SCHEDS)]
+                    else:
+                        cmd = ["-M", "0"]
+                    # pylint: disable=consider-using-with
+                    procs[idx] = Popen(
+                        [
+                            str(afl_fuzz),
+                            "-t",
+                            str(opts.afl_timeout),
+                            "-Y",
+                            *cmd,
+                            "-i",
+                            str(corpus_in),
+                            "-o",
+                            str(corpus_out),
+                            "--",
+                            str(opts.sharedir.resolve()),
+                        ],
+                        text=True,
+                    )
+                    last_afl_start = int(time())
+
+            # submit any crashes
+            for log in corpus_out.glob("*/crashes/*.log"):
+                log_content = (
+                    log.read_text()
+                    .replace(
+                        "ld_preload_fuzz_no_pt.so",
+                        str(opts.sharedir.resolve() / "ld_preload_fuzz_no_pt.so"),
+                    )
+                    .replace(
+                        "/home/user/firefox", str(opts.sharedir.resolve() / "firefox")
+                    )
+                )
+                symbolized = run(
+                    [ASAN_SYMBOLIZE, "-d"],
+                    input=log_content,
+                    stderr=DEVNULL,
+                    stdout=PIPE,
+                    text=True,
+                ).stdout
+                symbolized = "".join(symbolized.splitlines(keepends=True)[:-1])
+                if collector is not None:
+                    result = collector.submit(
+                        CrashInfo.fromRawCrashData(
+                            [], [], bin_config, auxCrashData=symbolized
+                        ),
+                        str(log.with_suffix("")),
+                    )
+                    print(f"reported: {result}")
+                else:
+                    log.with_suffix(".log.symbolized").write_text(symbolized)
+                log.rename(log.with_suffix(".log.processed"))
+
+            # Only upload new corpus files every 2 hours or after corpus reduction
+            if opts.s3_queue_upload and last_queue_upload < time() - 7200:
+                assert s3m is not None
+                s3m.upload_afl_queue_dir(corpus_out / "0")
+                last_queue_upload = int(time())
+
+            # Calculate stats
+            if opts.stats:
+                stats.update_and_write(
+                    opts.stats,
+                    [path.parent for path in corpus_out.glob("*/fuzzer_stats")],
+                )
+
+            sleep(5)
+    finally:
+        # terminate(), wait(10), kill(), wait()
+        # but do in parallel in case there are many procs,
+        # we only need to wait 10s total not for each.
+        start_term = time()
+        for proc in procs:
+            if proc:
+                proc.terminate()
+        while any(procs) and start_term > time() - 10:
+            for idx, proc in enumerate(procs):
+                if proc and proc.poll() is not None:
+                    procs[idx] = None
+        for proc in procs:
+            if proc:
+                proc.kill()
+                proc.wait()
+
+        if s3m and opts.s3_queue_upload:
+            s3m.upload_afl_queue_dir(corpus_out / "0")
+
+    return 0
