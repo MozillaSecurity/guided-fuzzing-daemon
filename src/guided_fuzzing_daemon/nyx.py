@@ -4,6 +4,7 @@
 import os
 import sys
 from argparse import Namespace
+from math import log10
 from pathlib import Path
 from random import choice
 from shutil import copy, rmtree, which
@@ -143,6 +144,10 @@ def nyx_main(
     open_files: List[TextIO] = []
     tee_buf: List[str] = [""] * opts.nyx_instances
     printed_pos: List[int] = [0] * opts.nyx_instances
+    if opts.nyx_instances > 1:
+        instance_width = int(log10(opts.nyx_instances - 1)) + 1
+    else:
+        instance_width = 1
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
     tmp_base = Path(mkdtemp(prefix="gfd-"))
@@ -231,13 +236,13 @@ def nyx_main(
                     printed_pos[idx] = read_file.tell()
                 lines_and_tail = new_data.rsplit("\n", 1)
                 if len(lines_and_tail) == 1:
-                    tee_buf[idx] += lines_and_tail[0]
+                    tee_buf[idx] = f"{tee_buf[idx]}{lines_and_tail[0]}"
                 else:
                     lines, tail = lines_and_tail
                     lines = f"{tee_buf[idx]}{lines}"
                     tee_buf[idx] = tail
                     for line in lines.splitlines():
-                        print(f"[{idx}] {line}")
+                        print(f"[{idx:{instance_width}}] {line}")
 
             # submit any crashes
             for log in corpus_out.glob("*/crashes/*.log"):
