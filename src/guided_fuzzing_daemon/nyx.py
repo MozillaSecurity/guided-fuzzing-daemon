@@ -7,7 +7,7 @@ from argparse import Namespace
 from pathlib import Path
 from random import choice
 from shutil import copy, rmtree, which
-from subprocess import DEVNULL, PIPE, Popen, run
+from subprocess import DEVNULL, PIPE, STDOUT, Popen, run
 from tempfile import mkdtemp
 from time import sleep, time
 from typing import List, Optional, TextIO, Union
@@ -63,7 +63,7 @@ class AFLStats(StatAggregator):
         any_stat = False
 
         def convert_num(num: str) -> Union[float, int]:
-            if "." in num:
+            if "." in num or num == "inf":
                 return float(num)
             return int(num)
 
@@ -123,8 +123,9 @@ def nyx_main(
 
     corpus_out.mkdir(parents=True, exist_ok=True)
 
-    last_queue_upload = int(time())
-    last_afl_start = 0
+    last_queue_upload = time()
+    last_stats_report = time()
+    last_afl_start = 0.0
     bin_config = ProgramConfiguration.fromBinary(
         str(opts.sharedir / "firefox" / "firefox")
     )
@@ -140,6 +141,7 @@ def nyx_main(
 
     procs: List[Optional["Popen[str]"]] = [None] * opts.nyx_instances
     open_files: List[TextIO] = []
+    tee_buf: List[str] = [""] * opts.nyx_instances
     printed_pos: List[int] = [0] * opts.nyx_instances
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
@@ -152,7 +154,7 @@ def nyx_main(
                     open_files.append(
                         open(opts.afl_log_pattern % (idx,), "w", encoding="utf-8")
                     )
-                elif opts.nyx_log_pattern:
+                else:
                     # pylint: disable=consider-using-with
                     open_files.append(open(opts.afl_log_pattern, "w", encoding="utf-8"))
             else:
@@ -160,6 +162,7 @@ def nyx_main(
 
         seed = choice([inp for inp in corpus_in.iterdir() if inp.is_file()])
         corpus_seed = tmp_base / "corpus_seed"
+        corpus_seed.mkdir()
         copy(seed, corpus_seed)
 
         while True:
@@ -191,7 +194,7 @@ def nyx_main(
                     if opts.nyx_log_pattern:
                         if "%" in opts.nyx_log_pattern:
                             this_env["AFL_NYX_LOG"] = opts.nyx_log_pattern % (idx,)
-                        elif opts.nyx_log_pattern:
+                        else:
                             this_env["AFL_NYX_LOG"] = opts.nyx_log_pattern
 
                     # pylint: disable=consider-using-with
@@ -203,7 +206,11 @@ def nyx_main(
                             "-Y",
                             *cmd,
                             "-i",
-                            str(corpus_seed if opts.nyx_async_corpus else corpus_in),
+                            str(
+                                (
+                                    corpus_seed if opts.nyx_async_corpus else corpus_in
+                                ).resolve()
+                            ),
                             "-o",
                             str(corpus_out.resolve()),
                             "--",
@@ -211,21 +218,26 @@ def nyx_main(
                         ],
                         text=True,
                         env=this_env,
-                        stderr=PIPE,
+                        stderr=STDOUT,
                         stdout=open_files[idx],
                     )
-                    last_afl_start = int(time())
+                    last_afl_start = time()
 
             # tee logs
             for idx, file in enumerate(open_files):
                 with open(file.name, encoding="utf-8") as read_file:
                     read_file.seek(printed_pos[idx])
                     new_data = read_file.read()
-                new_data = new_data.rsplit("\n", 1)[0]
-                if new_data:
-                    printed_pos[idx] += len(new_data) + 1
-                    for line in new_data.splitlines():
-                        print(f"[{idx:<3d}]{line}")
+                    printed_pos[idx] = read_file.tell()
+                lines_and_tail = new_data.rsplit("\n", 1)
+                if len(lines_and_tail) == 1:
+                    tee_buf[idx] += lines_and_tail[0]
+                else:
+                    lines, tail = lines_and_tail
+                    lines = f"{tee_buf[idx]}{lines}"
+                    tee_buf[idx] = tail
+                    for line in lines.splitlines():
+                        print(f"[{idx}] {line}")
 
             # submit any crashes
             for log in corpus_out.glob("*/crashes/*.log"):
@@ -254,7 +266,7 @@ def nyx_main(
                         ),
                         str(log.with_suffix("")),
                     )
-                    print(f"reported: {result}")
+                    print(f"reported: \"{result['shortSignature']}\" as {result['id']}")
                 else:
                     log.with_suffix(".log.symbolized").write_text(symbolized)
                 log.rename(log.with_suffix(".log.processed"))
@@ -263,16 +275,17 @@ def nyx_main(
             if opts.s3_queue_upload and last_queue_upload < time() - 7200:
                 assert s3m is not None
                 s3m.upload_afl_queue_dir(corpus_out / "0")
-                last_queue_upload = int(time())
+                last_queue_upload = time()
 
             # Calculate stats
-            if opts.stats:
+            if opts.stats and last_stats_report < time() - 30:
                 stats.update_and_write(
                     opts.stats,
                     [path.parent for path in corpus_out.glob("*/fuzzer_stats")],
                 )
+                last_stats_report = time()
 
-            sleep(5)
+            sleep(0.1)
     finally:
         # terminate(), wait(10), kill(), wait()
         # but do in parallel in case there are many procs,

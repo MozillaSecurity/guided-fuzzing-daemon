@@ -17,7 +17,7 @@ def _check_log_pattern(
         parser.error(f"{arg_name} expects exactly one %d pattern")
     if (
         "%" in pattern
-        and re.search(r"%[#0 +-]*\d*\.\d*[hlL]?[diouxX]", pattern) is None
+        and re.search(r"%[#0 +-]*\d*\.?\d*[hlL]?[diouxX]", pattern) is None
     ):
         parser.error(f"{arg_name} %d pattern not recognized")
         try:
@@ -265,13 +265,13 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     )
     nyx_group.add_argument(
         "--afl-log-pattern",
-        help="Redirect AFL logs to a separate path. Must contain %d pattern if "
+        help="Redirect AFL logs to a separate path. Must contain %%d pattern if "
         "--nyx-instances > 1.",
     )
     nyx_group.add_argument(
         "--nyx-log-pattern",
-        help="Write Nyx hprint logs to a separate path. Must contain %d pattern if "
-        "--nyx-instances > 1.",
+        help="Write Nyx hprint logs to a separate path (and hide on console). Must "
+        "contain %%d pattern if --nyx-instances > 1.",
     )
     nyx_group.add_argument(
         "--nyx-async-corpus",
