@@ -161,7 +161,10 @@ def nyx_main(
 
     opts.corpus_out.mkdir(parents=True, exist_ok=True)
 
-    last_queue_upload = last_stats_report = time()
+    if opts.max_runtime == 0.0:
+        opts.max_runtime = float("inf")
+
+    start = last_queue_upload = last_stats_report = time()
     last_afl_start = 0.0
     bin_config = ProgramConfiguration.fromBinary(
         str(opts.sharedir / "firefox" / "firefox")
@@ -213,7 +216,7 @@ def nyx_main(
         corpus_seed.mkdir()
         copy(seed, corpus_seed)
 
-        while True:
+        while opts.max_runtime > time() - start:
             # check and restart subprocesses
             for idx, proc in enumerate(procs):
                 if proc and proc.poll() is not None:

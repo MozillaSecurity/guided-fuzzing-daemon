@@ -190,6 +190,22 @@ def test_args_04():
             "afl-hide-logs requires --afl-log-pattern",
             id="afl-hide-needs-pattern",
         ),
+        pytest.param(
+            [
+                "--sharedir",
+                "",
+                "--afl-binary-dir",
+                "",
+                "--max-runtime",
+                "-1",
+                "-i",
+                "tmp",
+                "-o",
+                "tmp",
+            ],
+            "max-runtime must be positive",
+            id="max-runtime-positive",
+        ),
     ),
 )
 def test_args_05(args, capsys, mocker, msg, tmp_path):
