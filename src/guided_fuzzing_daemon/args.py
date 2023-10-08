@@ -5,6 +5,7 @@ import re
 import sys
 from argparse import REMAINDER, ArgumentParser, Namespace
 from pathlib import Path
+from shutil import which
 from typing import List, Optional
 
 from .utils import HAVE_FFPUPPET
@@ -14,17 +15,21 @@ def _check_log_pattern(
     instances: int, pattern: str, arg_name: str, parser: ArgumentParser
 ) -> None:
     if instances > 1 and pattern.count("%") != 1:
-        parser.error(f"{arg_name} expects exactly one %d pattern")
+        parser.error(f"{arg_name} expects exactly one %d placeholder")
     if (
         "%" in pattern
         and re.search(r"%[#0 +-]*\d*\.?\d*[hlL]?[diouxX]", pattern) is None
     ):
-        parser.error(f"{arg_name} %d pattern not recognized")
-        try:
-            if len({(pattern % (i,)) for i in range(1000)}) != 1000:
-                parser.error(f"{arg_name} does not produce distinct paths")
-        except TypeError as exc:
-            parser.error(f"{arg_name} is malformed: {exc}")
+        parser.error(f"{arg_name} %d placeholder not recognized")
+    # I don't think non-distinct or malformed cases below can be hit, but be
+    # extra cautious.
+    try:
+        if len({(pattern % (i,)) for i in range(1000)}) != 1000:
+            parser.error(
+                f"{arg_name} does not produce distinct paths"
+            )  # pragma: no cover
+    except TypeError as exc:  # pragma: no cover
+        parser.error(f"{arg_name} is malformed: {exc}")
 
 
 def parse_args(argv: Optional[List[str]] = None) -> Namespace:
@@ -265,13 +270,13 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     )
     nyx_group.add_argument(
         "--afl-log-pattern",
-        help="Redirect AFL logs to a separate path. Must contain %%d pattern if "
+        help="Redirect AFL logs to a separate path. Must contain %%d placeholder if "
         "--nyx-instances > 1.",
     )
     nyx_group.add_argument(
         "--nyx-log-pattern",
         help="Write Nyx hprint logs to a separate path (and hide on console). Must "
-        "contain %%d pattern if --nyx-instances > 1.",
+        "contain %%d placeholder if --nyx-instances > 1.",
     )
     nyx_group.add_argument(
         "--nyx-async-corpus",
@@ -413,6 +418,20 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         help="Path to the AFL binary directory to use",
         metavar="DIR",
     )
+    afl_group.add_argument(
+        "--corpus-in",
+        "-i",
+        type=Path,
+        help="AFL input directory with test cases",
+        metavar="DIR",
+    )
+    afl_group.add_argument(
+        "--corpus-out",
+        "-o",
+        type=Path,
+        help="AFL output directory for findings",
+        metavar="DIR",
+    )
     afl_group.add_argument("rargs", nargs=REMAINDER)
 
     if not argv:
@@ -426,6 +445,12 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     )
 
     opts = parser.parse_args(argv)
+
+    # try to find afl-fuzz if --afl-binary-dir not given
+    if not opts.aflbindir:
+        afl_auto_dir = which("afl-fuzz")
+        if afl_auto_dir is not None:
+            opts.aflbindir = Path(afl_auto_dir).parent
 
     if opts.transform and not opts.transform.is_file():
         parser.error(f"Failed to locate transformation script {opts.transform}")
@@ -445,12 +470,17 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
             parser.error("Must specify both --s3-bucket and --project for S3 actions")
 
     if opts.mode == "nyx":
+        if opts.rargs:
+            parser.error("Nyx mode takes no positional args")
         if not opts.sharedir or not opts.sharedir.is_dir():
             parser.error("Must specify --sharedir with --nyx")
         if not opts.aflbindir:
             parser.error("Must specify --afl-binary-dir for Nyx mode")
-        if len(opts.rargs) != 2:
-            parser.error("Nyx mode expects positional args: CORPUS_IN CORPUS_OUT")
+        if not opts.corpus_in or not opts.corpus_in.is_dir():
+            parser.error("Must specify --corpus-in with --nyx")
+        if not opts.corpus_out:
+            # don't check existence, main() will auto-create
+            parser.error("Must specify --corpus-out with --nyx")
         if opts.nyx_log_pattern is not None:
             _check_log_pattern(
                 opts.nyx_instances, opts.nyx_log_pattern, "--nyx-log-pattern", parser
