@@ -122,12 +122,13 @@ class LogFile:
 
 
 class LogTee:
-    def __init__(self, instances: int) -> None:
+    def __init__(self, hide: bool, instances: int) -> None:
         self.open_files: List[LogFile] = []
         if instances > 1:
             self.instance_width = int(log10(instances - 1)) + 1
         else:
             self.instance_width = 1
+        self.hide = hide
 
     def append(self, handle: TextIO) -> None:
         idx = len(self.open_files)
@@ -135,12 +136,14 @@ class LogTee:
         self.open_files.append(LogFile(handle, prefix))
 
     def print(self) -> None:
-        for open_file in self.open_files:
-            open_file.print()
+        if not self.hide:
+            for open_file in self.open_files:
+                open_file.print()
 
     def close(self) -> None:
         for open_file in self.open_files:
-            open_file.print(flush=True)
+            if not self.hide:
+                open_file.print(flush=True)
             open_file.handle.close()
 
 
@@ -187,7 +190,7 @@ def nyx_main(
     warn_local(opts)
 
     procs: List[Optional["Popen[str]"]] = [None] * opts.nyx_instances
-    log_tee = LogTee(opts.nyx_instances)
+    log_tee = LogTee(opts.nyx_hide_logs, opts.nyx_instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
     tmp_base = Path(mkdtemp(prefix="gfd-"))

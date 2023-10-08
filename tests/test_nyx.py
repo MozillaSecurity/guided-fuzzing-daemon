@@ -93,6 +93,7 @@ def nyx_common(mocker, tmp_path):
             self.args.env = []
             self.args.metadata = []
             self.args.nyx_async_corpus = False
+            self.args.nyx_hide_logs = False
             self.args.nyx_instances = 1
             self.args.nyx_log_pattern = None
             self.args.rargs = []
@@ -331,17 +332,19 @@ def test_nyx_07(nyx):
 
 # test that logs are teed
 @pytest.mark.parametrize(
-    "instances, pattern",
+    "instances, hide, pattern",
     [
-        pytest.param(1, "%d", id="instance-pattern"),
-        pytest.param(1, "", id="instance-plain"),
-        pytest.param(2, "%d", id="two-instances"),
+        pytest.param(1, False, "%d", id="instance-pattern"),
+        pytest.param(1, False, "", id="instance-plain"),
+        pytest.param(2, False, "%d", id="two-instances"),
+        pytest.param(1, True, "", id="hide-logs"),
     ],
 )
-def test_nyx_08(capsys, instances, nyx, pattern, tmp_path):
+def test_nyx_08(capsys, hide, instances, nyx, pattern, tmp_path):
     """nyx exited processes are restarted"""
     # setup
     nyx.sleep.side_effect = chain(repeat(None, 124), [NyxMainBreak, None])
+    nyx.args.nyx_hide_logs = hide
     nyx.args.nyx_instances = instances
     nyx.args.nyx_log_pattern = str(tmp_path / f"nyx{pattern}")
     nyx.args.afl_log_pattern = str(tmp_path / f"afl{pattern}")
@@ -363,13 +366,14 @@ def test_nyx_08(capsys, instances, nyx, pattern, tmp_path):
             with open(filename, "a", encoding="utf-8") as hnd:
                 print(value, end="" if cont else "\n", file=hnd)
             # save the values as printed to log files, so we can compare to stdout
-            if out_line[idx] is None:
-                out_line[idx] = len(out)
-                out.append(f"[{idx}] {value}")
-            else:
-                out[out_line[idx]] = f"{out[out_line[idx]]}{value}"
-            if not cont:
-                out_line[idx] = None
+            if not hide:
+                if out_line[idx] is None:
+                    out_line[idx] = len(out)
+                    out.append(f"[{idx}] {value}")
+                else:
+                    out[out_line[idx]] = f"{out[out_line[idx]]}{value}"
+                if not cont:
+                    out_line[idx] = None
         # handle default sleep() side-effects
         result = next(orig_sleep_iter)
         if isinstance(result, type) and issubclass(result, Exception):

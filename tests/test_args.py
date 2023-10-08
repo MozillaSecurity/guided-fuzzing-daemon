@@ -175,6 +175,21 @@ def test_args_04():
             "nyx-log-pattern expects exactly one",
             id="too-many-nyx-pattern",
         ),
+        pytest.param(
+            [
+                "--sharedir",
+                "",
+                "--afl-binary-dir",
+                "",
+                "--afl-hide-logs",
+                "-i",
+                "tmp",
+                "-o",
+                "tmp",
+            ],
+            "afl-hide-logs requires --afl-log-pattern",
+            id="afl-hide-needs-pattern",
+        ),
     ),
 )
 def test_args_05(args, capsys, mocker, msg, tmp_path):

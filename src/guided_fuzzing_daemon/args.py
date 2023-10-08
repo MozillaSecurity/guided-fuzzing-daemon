@@ -284,6 +284,11 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         help="Init AFL with a single random file from the corpus, and load the rest "
         "after init in the main process only.",
     )
+    nyx_group.add_argument(
+        "--afl-hide-logs",
+        action="store_true",
+        help="Don't print AFL logs on stdout. Requires --afl-log-pattern.",
+    )
 
     fm_group.add_argument(
         "--custom-cmdline-file",
@@ -489,6 +494,8 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
             _check_log_pattern(
                 opts.nyx_instances, opts.afl_log_pattern, "--afl-log-pattern", parser
             )
+        if opts.afl_hide_logs and opts.afl_log_pattern is None:
+            parser.error("--afl-hide-logs requires --afl-log-pattern")
 
     if opts.mode == "libfuzzer" and not s3_main:
         if not opts.rargs:
