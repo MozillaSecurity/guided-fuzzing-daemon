@@ -23,9 +23,10 @@ from .utils import warn_local
 
 ASAN_SYMBOLIZE = which("asan_symbolize")
 POWER_SCHEDS = ("explore", "coe", "lin", "quad", "exploit", "rare")
+QUEUE_UPLOAD_PERIOD = 7200
 
 
-class AFLStats(StatAggregator):
+class NyxStats(StatAggregator):
     def __init__(self) -> None:
         super().__init__()
         self.add_field("execs_done", SumField())
@@ -57,9 +58,6 @@ class AFLStats(StatAggregator):
         """
         self.reset()
         do_not_convert = {"cycles_done", "bitmap_cvg"}
-
-        # Warnings to include
-        warnings = []
 
         any_stat = False
 
@@ -94,21 +92,56 @@ class AFLStats(StatAggregator):
         if not any_stat:
             return
 
-        # Look for unreported crashes
-        failed_reports = 0
-        for base_dir in base_dirs:
-            crashes_dir = base_dir / "crashes"
-            if not crashes_dir.is_dir():
-                continue
-            for crash_file in crashes_dir.iterdir():
-                if crash_file.suffix == ".failed":
-                    failed_reports += 1
-        if failed_reports:
-            warnings.append(
-                f"WARNING: Unreported crashes detected ({failed_reports})\n"
-            )
+        self.write_file(outfile, [])
 
-        self.write_file(outfile, warnings)
+
+class LogFile:
+    def __init__(self, handle: TextIO, prefix: str) -> None:
+        self.handle = handle
+        self.tee_buf = ""
+        self.printed_pos = 0
+        self.prefix = prefix
+
+    def print(self, flush: bool = False) -> None:
+        with open(self.handle.name, encoding="utf-8") as read_file:
+            read_file.seek(self.printed_pos)
+            new_data = read_file.read()
+            self.printed_pos = read_file.tell()
+        lines_and_tail = new_data.rsplit("\n", 1)
+        if len(lines_and_tail) == 1:
+            self.tee_buf = f"{self.tee_buf}{lines_and_tail[0]}"
+        else:
+            lines, tail = lines_and_tail
+            lines = f"{self.tee_buf}{lines}"
+            self.tee_buf = tail
+            for line in lines.splitlines():
+                print(f"[{self.prefix}] {line}")
+        if flush and self.tee_buf:
+            print(f"[{self.prefix}] {self.tee_buf}")
+            self.tee_buf = ""
+
+
+class LogTee:
+    def __init__(self, instances: int) -> None:
+        self.open_files: List[LogFile] = []
+        if instances > 1:
+            self.instance_width = int(log10(instances - 1)) + 1
+        else:
+            self.instance_width = 1
+
+    def append(self, handle: TextIO) -> None:
+        idx = len(self.open_files)
+        prefix = f"{idx:{self.instance_width}}"
+        self.open_files.append(LogFile(handle, prefix))
+
+    def print(self) -> None:
+        for open_file in self.open_files:
+            open_file.print()
+
+    def close(self) -> None:
+        for open_file in self.open_files:
+            open_file.print(flush=True)
+            open_file.handle.close()
 
 
 def nyx_main(
@@ -117,37 +150,44 @@ def nyx_main(
     assert opts.aflbindir.is_dir()
     assert opts.sharedir.is_dir()
     assert ASAN_SYMBOLIZE is not None
-    assert len(opts.rargs) == 2, "--nyx expects positional args: CORPUS_IN CORPUS_OUT"
-    corpus_in, corpus_out = map(Path, opts.rargs)
-    assert corpus_in.is_dir()
+    assert not opts.rargs, "--nyx takes no positional args"
+    assert opts.corpus_in
+    assert opts.corpus_out
+    assert opts.corpus_in.is_dir()
     assert opts.nyx_instances >= 1
 
-    corpus_out.mkdir(parents=True, exist_ok=True)
+    opts.corpus_out.mkdir(parents=True, exist_ok=True)
 
-    last_queue_upload = time()
-    last_stats_report = time()
+    last_queue_upload = last_stats_report = time()
     last_afl_start = 0.0
     bin_config = ProgramConfiguration.fromBinary(
         str(opts.sharedir / "firefox" / "firefox")
     )
     if collector is not None:
         assert bin_config
-    stats = AFLStats()
+    stats = NyxStats()
 
     # environment settings that apply to all instances
     env = os.environ.copy()
     env["AFL_NO_UI"] = "1"
 
+    if opts.env:
+        oenv = dict(kv.split("=", 1) for kv in opts.env)
+        if collector is not None:
+            bin_config.addEnvironmentVariables(oenv)
+        for envkey in oenv:
+            env[envkey] = oenv[envkey]
+
+    metadata = {}
+    if opts.metadata:
+        metadata.update(dict(kv.split("=", 1) for kv in opts.metadata))
+        if collector is not None:
+            bin_config.addMetadata(metadata)
+
     warn_local(opts)
 
     procs: List[Optional["Popen[str]"]] = [None] * opts.nyx_instances
-    open_files: List[TextIO] = []
-    tee_buf: List[str] = [""] * opts.nyx_instances
-    printed_pos: List[int] = [0] * opts.nyx_instances
-    if opts.nyx_instances > 1:
-        instance_width = int(log10(opts.nyx_instances - 1)) + 1
-    else:
-        instance_width = 1
+    log_tee = LogTee(opts.nyx_instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
     tmp_base = Path(mkdtemp(prefix="gfd-"))
@@ -156,16 +196,16 @@ def nyx_main(
             if opts.afl_log_pattern:
                 if "%" in opts.afl_log_pattern:
                     # pylint: disable=consider-using-with
-                    open_files.append(
+                    log_tee.append(
                         open(opts.afl_log_pattern % (idx,), "w", encoding="utf-8")
                     )
                 else:
                     # pylint: disable=consider-using-with
-                    open_files.append(open(opts.afl_log_pattern, "w", encoding="utf-8"))
+                    log_tee.append(open(opts.afl_log_pattern, "w", encoding="utf-8"))
             else:
-                open_files.append((tmp_base / f"screen{idx}.log").open("w"))
+                log_tee.append((tmp_base / f"screen{idx}.log").open("w"))
 
-        seed = choice([inp for inp in corpus_in.iterdir() if inp.is_file()])
+        seed = choice([inp for inp in opts.corpus_in.iterdir() if inp.is_file()])
         corpus_seed = tmp_base / "corpus_seed"
         corpus_seed.mkdir()
         copy(seed, corpus_seed)
@@ -183,14 +223,14 @@ def nyx_main(
                     and last_afl_start < time() - 60
                     # don't launch secondary instances until main instance has finished
                     # initializing
-                    and (not idx or (corpus_out / "0" / "fuzzer_stats").exists())
+                    and (not idx or (opts.corpus_out / "0" / "fuzzer_stats").exists())
                 ):
                     if idx:
                         cmd = ["-S", str(idx), "-p", choice(POWER_SCHEDS)]
                     else:
                         cmd = ["-M", "0"]
                         if opts.nyx_async_corpus:
-                            cmd.extend(("-F", str(corpus_in)))
+                            cmd.extend(("-F", str(opts.corpus_in)))
 
                     # environment settings that apply to this instance
                     this_env = env.copy()
@@ -213,39 +253,28 @@ def nyx_main(
                             "-i",
                             str(
                                 (
-                                    corpus_seed if opts.nyx_async_corpus else corpus_in
+                                    corpus_seed
+                                    if opts.nyx_async_corpus
+                                    else opts.corpus_in
                                 ).resolve()
                             ),
                             "-o",
-                            str(corpus_out.resolve()),
+                            str(opts.corpus_out.resolve()),
                             "--",
                             str(opts.sharedir.resolve()),
                         ],
                         text=True,
                         env=this_env,
                         stderr=STDOUT,
-                        stdout=open_files[idx],
+                        stdout=log_tee.open_files[idx].handle,
                     )
                     last_afl_start = time()
 
             # tee logs
-            for idx, file in enumerate(open_files):
-                with open(file.name, encoding="utf-8") as read_file:
-                    read_file.seek(printed_pos[idx])
-                    new_data = read_file.read()
-                    printed_pos[idx] = read_file.tell()
-                lines_and_tail = new_data.rsplit("\n", 1)
-                if len(lines_and_tail) == 1:
-                    tee_buf[idx] = f"{tee_buf[idx]}{lines_and_tail[0]}"
-                else:
-                    lines, tail = lines_and_tail
-                    lines = f"{tee_buf[idx]}{lines}"
-                    tee_buf[idx] = tail
-                    for line in lines.splitlines():
-                        print(f"[{idx:{instance_width}}] {line}")
+            log_tee.print()
 
             # submit any crashes
-            for log in corpus_out.glob("*/crashes/*.log"):
+            for log in opts.corpus_out.glob("*/crashes/*.log"):
                 log_content = (
                     log.read_text()
                     .replace(
@@ -265,28 +294,48 @@ def nyx_main(
                 ).stdout
                 symbolized = "".join(symbolized.splitlines(keepends=True)[:-1])
                 if collector is not None:
-                    result = collector.submit(
-                        CrashInfo.fromRawCrashData(
-                            [], [], bin_config, auxCrashData=symbolized
-                        ),
-                        str(log.with_suffix("")),
+                    crash_info = CrashInfo.fromRawCrashData(
+                        [], [], bin_config, auxCrashData=symbolized
                     )
-                    print(f"reported: \"{result['shortSignature']}\" as {result['id']}")
+
+                    (sigfile, metadata) = collector.search(crash_info)
+
+                    if sigfile is not None:
+                        print(
+                            f"Crash matches signature {sigfile}, not submitting...",
+                            file=sys.stderr,
+                        )
+                    else:
+                        collector.generate(
+                            crash_info,
+                            forceCrashAddress=True,
+                            forceCrashInstruction=False,
+                            numFrames=8,
+                        )
+                        result = collector.submit(crash_info, str(log.with_suffix("")))
+                        print(
+                            'Successfully submitted crash: "'
+                            f"{result['shortSignature']}\" as {result['id']}",
+                            file=sys.stderr,
+                        )
                 else:
                     log.with_suffix(".log.symbolized").write_text(symbolized)
                 log.rename(log.with_suffix(".log.processed"))
 
             # Only upload new corpus files every 2 hours or after corpus reduction
-            if opts.s3_queue_upload and last_queue_upload < time() - 7200:
+            if (
+                opts.s3_queue_upload
+                and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD
+            ):
                 assert s3m is not None
-                s3m.upload_afl_queue_dir(corpus_out / "0")
+                s3m.upload_afl_queue_dir(opts.corpus_out / "0")
                 last_queue_upload = time()
 
             # Calculate stats
             if opts.stats and last_stats_report < time() - 30:
                 stats.update_and_write(
                     opts.stats,
-                    [path.parent for path in corpus_out.glob("*/fuzzer_stats")],
+                    [path.parent for path in opts.corpus_out.glob("*/fuzzer_stats")],
                 )
                 last_stats_report = time()
 
@@ -300,6 +349,7 @@ def nyx_main(
             if proc:
                 proc.terminate()
         while any(procs) and start_term > time() - 10:
+            sleep(0.1)
             for idx, proc in enumerate(procs):
                 if proc and proc.poll() is not None:
                     procs[idx] = None
@@ -308,11 +358,17 @@ def nyx_main(
                 proc.kill()
                 proc.wait()
 
-        for file in open_files:
-            file.close()
+        log_tee.close()
 
         if s3m and opts.s3_queue_upload:
-            s3m.upload_afl_queue_dir(corpus_out / "0")
+            s3m.upload_afl_queue_dir(opts.corpus_out / "0")
+
+        # final stats
+        if opts.stats:
+            stats.update_and_write(
+                opts.stats,
+                [path.parent for path in opts.corpus_out.glob("*/fuzzer_stats")],
+            )
 
         rmtree(tmp_base)
 

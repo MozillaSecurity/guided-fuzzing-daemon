@@ -15,7 +15,6 @@ from guided_fuzzing_daemon.args import parse_args
             ["--aflfuzz", "--firefox"], "require FFPuppet to be installed", id="afl"
         ),
         pytest.param(["--libfuzzer"], "No arguments", id="libfuzzer"),
-        pytest.param(["--nyx"], "specify --sharedir", id="nyx"),
         pytest.param(
             ["--libfuzzer-auto-reduce=0"], "Auto reduce threshold", id="lf-auto-reduce"
         ),
@@ -88,3 +87,141 @@ def test_args_04():
             "test",
         ]
     )
+
+
+@pytest.mark.parametrize(
+    "args, msg",
+    (
+        pytest.param([], "specify --sharedir", id="wo-sharedir"),
+        pytest.param([""], "takes no positional", id="extra-args"),
+        pytest.param(
+            ["--sharedir", ""], "Must specify --afl-binary-dir for Nyx", id="wo-bindir"
+        ),
+        pytest.param(
+            ["--sharedir", "", "--afl-binary-dir", ""],
+            "specify --corpus-in",
+            id="wo-corpus-in",
+        ),
+        pytest.param(
+            ["--sharedir", "", "--afl-binary-dir", "", "-i", "tmp"],
+            "specify --corpus-out",
+            id="wo-corpus-out",
+        ),
+        pytest.param(
+            [
+                "--sharedir",
+                "",
+                "--afl-binary-dir",
+                "",
+                "--afl-log-pattern",
+                "%n",
+                "-i",
+                "tmp",
+                "-o",
+                "tmp",
+            ],
+            "afl-log-pattern %d placeholder not recognized",
+            id="bad-afl-pattern",
+        ),
+        pytest.param(
+            [
+                "--sharedir",
+                "",
+                "--afl-binary-dir",
+                "",
+                "--nyx-instances",
+                "2",
+                "--afl-log-pattern",
+                "%d%d",
+                "-i",
+                "tmp",
+                "-o",
+                "tmp",
+            ],
+            "afl-log-pattern expects exactly one",
+            id="too-many-afl-pattern",
+        ),
+        pytest.param(
+            [
+                "--sharedir",
+                "",
+                "--afl-binary-dir",
+                "",
+                "--nyx-log-pattern",
+                "%n",
+                "-i",
+                "tmp",
+                "-o",
+                "tmp",
+            ],
+            "nyx-log-pattern %d placeholder not recognized",
+            id="bad-nyx-pattern",
+        ),
+        pytest.param(
+            [
+                "--sharedir",
+                "",
+                "--afl-binary-dir",
+                "",
+                "--nyx-instances",
+                "2",
+                "--nyx-log-pattern",
+                "%d%d",
+                "-i",
+                "tmp",
+                "-o",
+                "tmp",
+            ],
+            "nyx-log-pattern expects exactly one",
+            id="too-many-nyx-pattern",
+        ),
+    ),
+)
+def test_args_05(args, capsys, mocker, msg, tmp_path):
+    """misc nyx args"""
+    mocker.patch("guided_fuzzing_daemon.args.which", return_value=None)
+    args = [(arg if arg != "tmp" else str(tmp_path)) for arg in args]
+    with pytest.raises(SystemExit):
+        parse_args(["gfd", "--nyx", *args])
+    stdio = capsys.readouterr()
+    assert msg in stdio.err
+
+
+def test_args_06(tmp_path):
+    """nyx %d checking"""
+    parse_args(
+        [
+            "gfd",
+            "--nyx",
+            "--nyx-instances",
+            "2",
+            "--sharedir",
+            "",
+            "--afl-binary-dir",
+            "",
+            "--afl-log-pattern",
+            "%d",
+            "-i",
+            str(tmp_path),
+            "-o",
+            str(tmp_path),
+        ]
+    )
+
+
+def test_args_07(mocker, tmp_path):
+    """--afl-binary-dir is found automatically"""
+    mocker.patch("guided_fuzzing_daemon.args.which", return_value=tmp_path)
+    opts = parse_args(
+        [
+            "gfd",
+            "--nyx",
+            "--sharedir",
+            str(tmp_path),
+            "-i",
+            str(tmp_path),
+            "-o",
+            str(tmp_path),
+        ]
+    )
+    assert opts.aflbindir == tmp_path.parent
