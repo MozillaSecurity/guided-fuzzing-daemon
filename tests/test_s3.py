@@ -65,3 +65,42 @@ def test_s3_main_02(mocker, tmp_path):
         mocker.call.download_corpus(tmp_path / "queues"),
         mocker.call.upload_corpus(tmp_path / "tests", corpus_delete=True),
     ]
+
+
+def test_s3_main_03(mocker, tmp_path):
+    """Nyx S3 corpus refresh"""
+    mgr = mocker.patch("guided_fuzzing_daemon.s3.S3Manager")
+    args = mocker.Mock()
+    args.mode = "nyx"
+    args.aflbindir = tmp_path
+    for s3_action in S3_ACTIONS:
+        setattr(args, s3_action, None)
+    args.s3_corpus_refresh = tmp_path
+    args.build = None
+    assert s3_main(args) == 0
+    assert mgr.return_value.method_calls == [
+        mocker.call.clean_queue_dirs(),
+        mocker.call.download_queue_dirs(tmp_path),
+    ]
+    (tmp_path / "cmdline").write_text("build/firefox")
+    (tmp_path / "build").mkdir()
+
+    def fake_run(*_args, **_kwds):
+        (tmp_path / "tests" / "test").touch()
+
+    (tmp_path / "queues").mkdir()
+    binary = tmp_path / "build" / "firefox"
+    binary.touch()
+    binary.chmod(0o777)
+    mocker.patch("guided_fuzzing_daemon.s3.run", side_effect=fake_run)
+    assert s3_main(args) == 2
+    (tmp_path / "afl-cmin").touch()
+    mgr.reset_mock()
+    assert s3_main(args) == 0
+    assert mgr.return_value.method_calls == [
+        mocker.call.clean_queue_dirs(),
+        mocker.call.download_queue_dirs(tmp_path),
+        mocker.call.download_build(tmp_path / "build"),
+        mocker.call.download_corpus(tmp_path / "queues"),
+        mocker.call.upload_corpus(tmp_path / "tests", corpus_delete=True),
+    ]
