@@ -289,6 +289,12 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         action="store_true",
         help="Don't print AFL logs on stdout. Requires --afl-log-pattern.",
     )
+    nyx_group.add_argument(
+        "--max-runtime",
+        type=float,
+        default=0.0,
+        help="Specify maximum runtime in seconds for the whole session.",
+    )
 
     fm_group.add_argument(
         "--custom-cmdline-file",
@@ -496,6 +502,8 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
             )
         if opts.afl_hide_logs and opts.afl_log_pattern is None:
             parser.error("--afl-hide-logs requires --afl-log-pattern")
+        if opts.max_runtime < 0:
+            parser.error("--max-runtime must be positive (or 0 to disable).")
 
     if opts.mode == "libfuzzer" and not s3_main:
         if not opts.rargs:

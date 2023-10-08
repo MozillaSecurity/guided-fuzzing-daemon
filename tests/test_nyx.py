@@ -91,6 +91,7 @@ def nyx_common(mocker, tmp_path):
             (self.corpus_in / "test2.bin").write_text("B")
             self.args.corpus_out = self.corpus_out
             self.args.env = []
+            self.args.max_runtime = 0.0
             self.args.metadata = []
             self.args.nyx_async_corpus = False
             self.args.nyx_hide_logs = False
@@ -150,7 +151,7 @@ def test_nyx_02(mocker, nyx):
     """nyx queue is uploaded"""
     # setup
     mocker.patch("guided_fuzzing_daemon.nyx.QUEUE_UPLOAD_PERIOD", 90)
-    nyx.sleep.side_effect = chain(repeat(None, 100), [NyxMainBreak, None])
+    nyx.sleep.side_effect = chain(repeat(None, 60), [NyxMainBreak, None])
     nyx.args.s3_queue_upload = True
 
     # test
@@ -451,3 +452,16 @@ def test_nyx_09(mocker, tmp_path):
         "bitmap_cvg": "0.13% 0.04%",
         "last_find": "2024-09-13T06:13:16Z",
     }
+
+
+def test_nyx_10(nyx, tmp_path):
+    """nyx max runtime"""
+    # setup
+    nyx.args.max_runtime = 30.0
+    nyx.sleep.side_effect = chain(repeat(None, 60), [NyxMainBreak, None])
+
+    # test
+    chdir(tmp_path)
+    result = nyx_main(nyx.args, nyx.collector, nyx.s3m)
+
+    assert result == 0
