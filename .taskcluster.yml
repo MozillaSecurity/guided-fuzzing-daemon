@@ -59,7 +59,10 @@ tasks:
               TOXENV: py310,lint
 
   in:
-    $if: 'tasks_for in ["github-push", "github-release"] || (tasks_for == "github-pull-request" && event["action"] in ["opened", "reopened", "synchronize"])'
+    $if: >
+      (tasks_for == "github-push")
+      || (tasks_for == "github-pull-request" && event["action"] in ["opened", "reopened", "synchronize"])
+      || (tasks_for == "github-release" && event["action"] in ["published"])
     then:
       - created: {$fromNow: ''}
         deadline: {$fromNow: '1 hour'}
@@ -92,3 +95,4 @@ tasks:
           description: Schedule CI tasks for ${project_name}
           owner: truber@mozilla.com
           source: https://github.com/MozillaSecurity/guided-fuzzing-daemon
+    else: []
