@@ -398,8 +398,8 @@ def test_nyx_08(capsys, hide, instances, nyx, pattern, tmp_path):
         assert chld.kwargs["env"]["AFL_NYX_LOG"] == filename
 
 
-# test stats calculation
-def test_nyx_09(mocker, tmp_path):
+def test_nyx_09a(mocker, tmp_path):
+    """nyx stats calculation (positive)"""
     (tmp_path / "0").mkdir()
     (tmp_path / "0" / "fuzzer_stats").touch()
     mocker.patch.object(NyxStats, "add_sys_stats")
@@ -451,6 +451,46 @@ def test_nyx_09(mocker, tmp_path):
         "cycles_done": "3 1",
         "bitmap_cvg": "0.13% 0.04%",
         "last_find": "2024-09-13T06:13:16Z",
+    }
+
+
+def test_nyx_09b(mocker, tmp_path):
+    """nyx stats calculation (negative)"""
+    (tmp_path / "0").mkdir()
+    (tmp_path / "0" / "fuzzer_stats").touch()
+    mocker.patch.object(NyxStats, "add_sys_stats")
+    stats = NyxStats()
+    stats.update_and_write(tmp_path / "stats", [tmp_path / "0"])
+    assert not (tmp_path / "stats").exists()
+    (tmp_path / "0" / "fuzzer_stats").write_text(
+        "execs_done        : 7.76.17\n"
+        "execs_per_sec     : 22.64\n"
+        "pending_favs      : 12\n"
+        "pending_total     : 21\n"
+        "corpus_variable   : 13\n"
+        "saved_crashes     : 7\n"
+        "saved_hangs       : 4\n"
+        "cycles_done       : 3\n"
+        "bitmap_cvg        : 0.13%\n"
+        "last_find         : 1696207996\n"
+    )
+    stats.update_and_write(tmp_path / "stats", [tmp_path / "0"])
+    stat_lines = dict(
+        map(str.strip, line.split(":", 1))
+        for line in (tmp_path / "stats").read_text().splitlines()
+    )
+    assert stat_lines == {
+        "execs_done": "0",
+        "execs_per_sec": "22.64",
+        "pending_favs": "12",
+        "pending_total": "21",
+        "corpus_variable": "13",
+        "saved_crashes": "7",
+        "saved_hangs": "4",
+        "exec_timeout": "nan",
+        "cycles_done": "3",
+        "bitmap_cvg": "0.13%",
+        "last_find": "2023-10-02T00:53:16Z",
     }
 
 

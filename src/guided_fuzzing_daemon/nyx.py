@@ -83,7 +83,15 @@ class NyxStats(StatAggregator):
                     if field_name in do_not_convert:
                         self.fields[field_name].update(field_val)
                     else:
-                        self.fields[field_name].update(convert_num(field_val))
+                        try:
+                            self.fields[field_name].update(convert_num(field_val))
+                        except ValueError as exc:
+                            # ignore errors
+                            print(
+                                f"error reading {field_name} from {stats_path}: {exc}",
+                                file=sys.stderr,
+                            )
+                            continue
 
                     any_stat = True
 

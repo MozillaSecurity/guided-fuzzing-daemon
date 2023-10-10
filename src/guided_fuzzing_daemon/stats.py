@@ -139,7 +139,8 @@ class MeanField(Field):
 
     @property
     def value(self) -> float:
-        assert self._count
+        if not self._count:
+            return float("nan")
         return self._sum.value / self._count
 
     def update(self, value: int) -> None:
