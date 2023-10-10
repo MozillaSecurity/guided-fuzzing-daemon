@@ -8,7 +8,7 @@ from math import log10
 from pathlib import Path
 from random import choice
 from shutil import copy, rmtree, which
-from subprocess import DEVNULL, PIPE, STDOUT, Popen, run
+from subprocess import DEVNULL, PIPE, STDOUT, Popen, TimeoutExpired, run
 from tempfile import mkdtemp
 from time import sleep, time
 from typing import List, Optional, TextIO, Union
@@ -367,10 +367,18 @@ def nyx_main(
             for idx, proc in enumerate(procs):
                 if proc and proc.poll() is not None:
                     procs[idx] = None
+        if any(procs):
+            print(f"need to kill {sum(1 for proc in procs if proc)}", file=sys.stderr)
         for proc in procs:
             if proc:
                 proc.kill()
-                proc.wait()
+                try:
+                    proc.wait(timeout=1)
+                except TimeoutExpired:
+                    print(
+                        f"Process {proc.pid} did not exit after SIGKILL",
+                        file=sys.stderr,
+                    )
 
         log_tee.close()
 
