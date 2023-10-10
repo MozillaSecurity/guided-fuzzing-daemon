@@ -5,6 +5,7 @@
 from itertools import chain, count, repeat
 from os import chdir
 from pathlib import Path
+from subprocess import TimeoutExpired
 
 import pytest
 from Collector.Collector import Collector
@@ -162,7 +163,7 @@ def test_nyx_02(mocker, nyx):
     assert nyx.s3m.upload_afl_queue_dir.call_args == mocker.call(nyx.corpus_out / "0")
 
 
-def test_nyx_03(nyx):
+def test_nyx_03a(nyx):
     """nyx subprocess are terminated then killed"""
     nyx.sleep.side_effect = chain(repeat(None, 64), [NyxMainBreak], repeat(None))
 
@@ -182,6 +183,27 @@ def test_nyx_03(nyx):
     assert popen.poll.call_count > 0
     assert popen.kill.call_count == 1
     assert popen.wait.call_count == 1
+
+
+def test_nyx_03b(capsys, nyx):
+    """nyx subprocess are terminated then killed but kill is ignored"""
+    nyx.sleep.side_effect = chain(repeat(None, 64), [NyxMainBreak], repeat(None))
+
+    nyx.popen.return_value.pid = 123
+    nyx.popen.return_value.poll.side_effect = repeat(None)
+    nyx.popen.return_value.wait.side_effect = TimeoutExpired([], 1)
+
+    # test
+    nyx.main()
+
+    # check that terminate is called, then kill
+    popen = nyx.popen.return_value
+    assert popen.terminate.call_count == 1
+    assert popen.poll.call_count > 0
+    assert popen.kill.call_count == 1
+    assert popen.wait.call_count == 1
+    stdio = capsys.readouterr()
+    assert "123 did not exit after SIGKILL" in stdio.err
 
 
 @pytest.mark.parametrize(
