@@ -85,6 +85,7 @@ def nyx_common(mocker, tmp_path):
             self.aflbindir.mkdir()
             self.corpus_in.mkdir()
 
+            self.args.afl_hide_logs = False
             self.args.afl_log_pattern = None
             self.args.aflbindir = self.aflbindir
             self.args.corpus_in = self.corpus_in
@@ -95,7 +96,6 @@ def nyx_common(mocker, tmp_path):
             self.args.max_runtime = 0.0
             self.args.metadata = []
             self.args.nyx_async_corpus = False
-            self.args.nyx_hide_logs = False
             self.args.nyx_instances = 1
             self.args.nyx_log_pattern = None
             self.args.rargs = []
@@ -367,10 +367,10 @@ def test_nyx_08(capsys, hide, instances, nyx, pattern, tmp_path):
     """nyx exited processes are restarted"""
     # setup
     nyx.sleep.side_effect = chain(repeat(None, 124), [NyxMainBreak, None])
-    nyx.args.nyx_hide_logs = hide
+    nyx.args.afl_hide_logs = hide
+    nyx.args.afl_log_pattern = str(tmp_path / f"afl{pattern}")
     nyx.args.nyx_instances = instances
     nyx.args.nyx_log_pattern = str(tmp_path / f"nyx{pattern}")
-    nyx.args.afl_log_pattern = str(tmp_path / f"afl{pattern}")
 
     out = []
     out_line = [None] * instances

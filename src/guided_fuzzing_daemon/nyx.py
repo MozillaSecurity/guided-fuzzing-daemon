@@ -201,7 +201,7 @@ def nyx_main(
     warn_local(opts)
 
     procs: List[Optional["Popen[str]"]] = [None] * opts.nyx_instances
-    log_tee = LogTee(opts.nyx_hide_logs, opts.nyx_instances)
+    log_tee = LogTee(opts.afl_hide_logs, opts.nyx_instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
     tmp_base = Path(mkdtemp(prefix="gfd-"))
