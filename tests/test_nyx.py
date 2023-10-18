@@ -207,19 +207,23 @@ def test_nyx_03b(capsys, nyx):
 
 
 @pytest.mark.parametrize(
-    "dupe, have_collector",
+    "dupe, have_collector, symbolize_ret",
     [
-        pytest.param(False, False, id="no-collector"),
-        pytest.param(True, True, id="dupe"),
-        pytest.param(False, True, id="report"),
+        pytest.param(False, False, 0, id="no-collector"),
+        pytest.param(True, True, 0, id="dupe"),
+        pytest.param(False, True, 0, id="report"),
+        pytest.param(False, False, 1, id="no-sym-no-collector"),
+        pytest.param(False, True, 1, id="no-sym-report"),
     ],
 )
-def test_nyx_04(dupe, have_collector, nyx, tmp_path):
+def test_nyx_04(dupe, have_collector, mocker, nyx, symbolize_ret, tmp_path):
     """nyx crashes are symbolized and reported"""
     # setup
     nyx.sleep.side_effect = chain(repeat(None, 64), [NyxMainBreak, None])
     inp_log = "ld_preload_fuzz_no_pt.so\n/home/user/firefox/firefox\nblah\n"
     nyx.run.return_value.stdout = inp_log
+    nyx.run.return_value.stderr = "error\n"
+    nyx.run.return_value.returncode = symbolize_ret
     orig_popen_cb = nyx.popen.side_effect
 
     def popen_create_crash(*args, **kwds):
@@ -265,12 +269,29 @@ def test_nyx_04(dupe, have_collector, nyx, tmp_path):
         if dupe:
             assert nyx.collector.submit.call_count == 0
         else:
+            assert nyx.crash_info.fromRawCrashData.call_count == 1
+            assert nyx.crash_info.fromRawCrashData.call_args == mocker.call(
+                [],
+                [],
+                nyx.cfg.fromBinary.return_value,
+                # if symbolizer failed, crashdata should be unsymbolized
+                auxCrashData=kwds["input"] if symbolize_ret else inp_log,
+            )
             assert nyx.collector.submit.call_count == 1
+            assert nyx.collector.submit.call_args == mocker.call(
+                nyx.crash_info.fromRawCrashData.return_value,
+                str(nyx.corpus_out / "0" / "crashes" / "crash"),
+            )
             assert nyx.collector.generate.call_count == 1
-    else:
+    elif not symbolize_ret:
         assert (
             nyx.corpus_out / "0" / "crashes" / "crash.log.symbolized"
-        ).read_text() == ("ld_preload_fuzz_no_pt.so\n" "/home/user/firefox/firefox\n")
+        ).read_text() == (
+            "ld_preload_fuzz_no_pt.so\n" "/home/user/firefox/firefox\n" "blah\n"
+        )
+
+    else:
+        assert not (nyx.corpus_out / "0" / "crashes" / "crash.log.symbolized").is_file()
 
 
 def test_nyx_05(mocker, nyx):

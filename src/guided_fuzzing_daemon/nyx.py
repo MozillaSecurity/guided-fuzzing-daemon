@@ -8,7 +8,7 @@ from math import log10
 from pathlib import Path
 from random import choice
 from shutil import copy, rmtree, which
-from subprocess import DEVNULL, PIPE, STDOUT, Popen, TimeoutExpired, run
+from subprocess import STDOUT, Popen, TimeoutExpired, run
 from tempfile import mkdtemp
 from time import sleep, time
 from typing import List, Optional, TextIO, Union
@@ -296,27 +296,35 @@ def nyx_main(
 
             # submit any crashes
             for log in opts.corpus_out.glob("*/crashes/*.log"):
-                log_content = (
-                    log.read_text()
-                    .replace(
-                        "ld_preload_fuzz_no_pt.so",
-                        str(opts.sharedir.resolve() / "ld_preload_fuzz_no_pt.so"),
-                    )
-                    .replace(
-                        "/home/user/firefox", str(opts.sharedir.resolve() / "firefox")
-                    )
+                crash_path = log.with_suffix("")
+                log_content = log.read_text()
+                print(f"symbolizing {log} (len={len(log_content)})", file=sys.stderr)
+                log_content = log_content.replace(
+                    "ld_preload_fuzz_no_pt.so",
+                    str(opts.sharedir.resolve() / "ld_preload_fuzz_no_pt.so"),
+                ).replace(
+                    "/home/user/firefox", str(opts.sharedir.resolve() / "firefox")
                 )
-                symbolized = run(
+                sym_result = run(
                     [ASAN_SYMBOLIZE, "-d"],
                     input=log_content,
-                    stderr=DEVNULL,
-                    stdout=PIPE,
+                    capture_output=True,
                     text=True,
-                ).stdout
-                symbolized = "".join(symbolized.splitlines(keepends=True)[:-1])
+                )
+                if sym_result.returncode:
+                    print(
+                        f"asan_symbolize returned {sym_result.returncode}",
+                        file=sys.stderr,
+                    )
+                    print("=" * 20, file=sys.stderr)
+                    if sym_result.stderr.strip():
+                        sys.stderr.write(sym_result.stderr)
+                    print("=" * 20, file=sys.stderr)
+                else:
+                    log_content = symbolized = sym_result.stdout
                 if collector is not None:
                     crash_info = CrashInfo.fromRawCrashData(
-                        [], [], bin_config, auxCrashData=symbolized
+                        [], [], bin_config, auxCrashData=log_content
                     )
 
                     (sigfile, metadata) = collector.search(crash_info)
@@ -333,13 +341,13 @@ def nyx_main(
                             forceCrashInstruction=False,
                             numFrames=8,
                         )
-                        result = collector.submit(crash_info, str(log.with_suffix("")))
+                        result = collector.submit(crash_info, str(crash_path))
                         print(
                             'Successfully submitted crash: "'
                             f"{result['shortSignature']}\" as {result['id']}",
                             file=sys.stderr,
                         )
-                else:
+                elif not sym_result.returncode:
                     log.with_suffix(".log.symbolized").write_text(symbolized)
                 log.rename(log.with_suffix(".log.processed"))
 
