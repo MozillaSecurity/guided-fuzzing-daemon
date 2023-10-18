@@ -19,6 +19,7 @@ from FTB.Signatures.CrashInfo import CrashInfo
 
 from .s3 import S3Manager
 from .stats import (
+    GeneratedField,
     MaxTimeField,
     MeanField,
     MeanMinMaxField,
@@ -35,7 +36,7 @@ QUEUE_UPLOAD_PERIOD = 7200
 
 
 class NyxStats(StatAggregator):
-    def __init__(self) -> None:
+    def __init__(self, instances: int) -> None:
         super().__init__()
         self.add_field("execs_done", SumMinMaxField())
         self.add_field("execs_per_sec", SumMinMaxField())
@@ -48,6 +49,7 @@ class NyxStats(StatAggregator):
         self.add_field("cycles_done", ValueCounterField())
         self.add_field("bitmap_cvg", MeanMinMaxField(suffix="%"))
         self.add_field("last_find", MaxTimeField())
+        self.add_field("instances", GeneratedField(suffix=f"/{instances}"))
         self.add_sys_stats()
 
     def update_and_write(
@@ -187,7 +189,7 @@ def nyx_main(
     )
     if collector is not None:
         assert bin_config
-    stats = NyxStats()
+    stats = NyxStats(opts.nyx_instances)
 
     # environment settings that apply to all instances
     env = os.environ.copy()
@@ -238,6 +240,7 @@ def nyx_main(
                 if proc and proc.poll() is not None:
                     print(f"afl-fuzz returned early: {proc.wait()}", file=sys.stderr)
                     procs[idx] = proc = None
+                    stats.fields["instances"] -= 1  # type: ignore
 
                 if (
                     proc is None
@@ -291,6 +294,7 @@ def nyx_main(
                         stdout=log_tee.open_files[idx].handle,
                     )
                     last_afl_start = time()
+                    stats.fields["instances"] += 1  # type: ignore
 
             # tee logs
             log_tee.print()

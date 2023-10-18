@@ -447,7 +447,7 @@ def test_nyx_09a(mocker, tmp_path):
     (tmp_path / "0").mkdir()
     (tmp_path / "0" / "fuzzer_stats").touch()
     mocker.patch.object(NyxStats, "add_sys_stats")
-    stats = NyxStats()
+    stats = NyxStats(2)
     stats.update_and_write(tmp_path / "stats", [tmp_path / "0"])
     assert not (tmp_path / "stats").exists()
     (tmp_path / "0" / "fuzzer_stats").write_text(
@@ -495,6 +495,7 @@ def test_nyx_09a(mocker, tmp_path):
         "cycles_done": "1 (1×), 3 (1×)",  # noqa: RUF001
         "bitmap_cvg": "0.09% avg (0.04%-0.13% min/max)",
         "last_find": "2024-09-13T06:13:16Z",
+        "instances": "0/2",
     }
 
 
@@ -503,7 +504,7 @@ def test_nyx_09b(mocker, tmp_path):
     (tmp_path / "0").mkdir()
     (tmp_path / "0" / "fuzzer_stats").touch()
     mocker.patch.object(NyxStats, "add_sys_stats")
-    stats = NyxStats()
+    stats = NyxStats(1)
     stats.update_and_write(tmp_path / "stats", [tmp_path / "0"])
     assert not (tmp_path / "stats").exists()
     (tmp_path / "0" / "fuzzer_stats").write_text(
@@ -535,6 +536,7 @@ def test_nyx_09b(mocker, tmp_path):
         "cycles_done": "3 (1×)",  # noqa: RUF001
         "bitmap_cvg": "0.13% avg (0.13%-0.13% min/max)",
         "last_find": "2023-10-02T00:53:16Z",
+        "instances": "0/1",
     }
 
 
