@@ -62,12 +62,16 @@ class Field(ABC):
 class GeneratedField(Field):
     __slots__ = ("_value",)
 
-    def __init__(self, hidden: bool = False) -> None:
-        super().__init__(hidden=hidden, generated=True)
+    def __init__(self, hidden: bool = False, suffix: str = "") -> None:
+        super().__init__(hidden=hidden, generated=True, suffix=suffix)
         self._value: int = 0
 
     def __iadd__(self, value: int) -> "GeneratedField":
         self._value += value
+        return self
+
+    def __isub__(self, value: int) -> "GeneratedField":
+        self._value -= value
         return self
 
     def update(self, value: int) -> None:
