@@ -462,8 +462,8 @@ def test_nyx_09a(mocker, tmp_path):
         for line in (tmp_path / "stats").read_text().splitlines()
     )
     assert stat_lines == {
-        "execs_done": str(77617 * 2),
-        "execs_per_sec": str(22.64 * 2),
+        "execs_done": "155234 total (77617-77617 min/max)",
+        "execs_per_sec": "45.28 total (22.64-22.64 min/max)",
         "pending_favs": "36",
         "pending_total": "42",
         "corpus_variable": "26",
@@ -502,8 +502,8 @@ def test_nyx_09b(mocker, tmp_path):
         for line in (tmp_path / "stats").read_text().splitlines()
     )
     assert stat_lines == {
-        "execs_done": "0",
-        "execs_per_sec": "22.64",
+        "execs_done": "0 total (nan-nan min/max)",
+        "execs_per_sec": "22.64 total (22.64-22.64 min/max)",
         "pending_favs": "12",
         "pending_total": "21",
         "corpus_variable": "13",

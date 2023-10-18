@@ -162,8 +162,9 @@ class MaxField(Field):
         self._ignore_reset = ignore_reset
 
     @property
-    def value(self) -> int:
-        assert self._value is not None
+    def value(self) -> Union[float, int]:
+        if self._value is None:
+            return float("nan")
         return self._value
 
     def update(self, value: int) -> None:
@@ -186,7 +187,7 @@ class MaxTimeField(Field):
         self._max = MaxField(ignore_reset)
 
     @property
-    def value(self) -> int:
+    def value(self) -> Union[float, int]:
         return self._max.value
 
     def update(self, value: int) -> None:
@@ -212,8 +213,9 @@ class MinField(Field):
         self._value: Optional[int] = None
 
     @property
-    def value(self) -> int:
-        assert self._value is not None
+    def value(self) -> Union[float, int]:
+        if self._value is None:
+            return float("nan")
         return self._value
 
     def update(self, value: int) -> None:
