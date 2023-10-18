@@ -491,9 +491,9 @@ def test_nyx_09a(mocker, tmp_path):
         "corpus_variable": "26",
         "saved_crashes": "8",
         "saved_hangs": "13",
-        "exec_timeout": "25000.0",
-        "cycles_done": "3 1",
-        "bitmap_cvg": "0.13% 0.04%",
+        "exec_timeout": "25000",
+        "cycles_done": "1 (1×), 3 (1×)",  # noqa: RUF001
+        "bitmap_cvg": "0.09% avg (0.04%-0.13% min/max)",
         "last_find": "2024-09-13T06:13:16Z",
     }
 
@@ -532,8 +532,8 @@ def test_nyx_09b(mocker, tmp_path):
         "saved_crashes": "7",
         "saved_hangs": "4",
         "exec_timeout": "nan",
-        "cycles_done": "3",
-        "bitmap_cvg": "0.13%",
+        "cycles_done": "3 (1×)",  # noqa: RUF001
+        "bitmap_cvg": "0.13% avg (0.13%-0.13% min/max)",
         "last_find": "2023-10-02T00:53:16Z",
     }
 

@@ -19,12 +19,13 @@ from FTB.Signatures.CrashInfo import CrashInfo
 
 from .s3 import S3Manager
 from .stats import (
-    ListField,
     MaxTimeField,
     MeanField,
+    MeanMinMaxField,
     StatAggregator,
     SumField,
     SumMinMaxField,
+    ValueCounterField,
 )
 from .utils import warn_local
 
@@ -44,8 +45,8 @@ class NyxStats(StatAggregator):
         self.add_field("saved_crashes", SumField())
         self.add_field("saved_hangs", SumField())
         self.add_field("exec_timeout", MeanField())
-        self.add_field("cycles_done", ListField())
-        self.add_field("bitmap_cvg", ListField())
+        self.add_field("cycles_done", ValueCounterField())
+        self.add_field("bitmap_cvg", MeanMinMaxField(suffix="%"))
         self.add_field("last_find", MaxTimeField())
         self.add_sys_stats()
 
@@ -64,7 +65,7 @@ class NyxStats(StatAggregator):
                           one found inside the base directory.
         """
         self.reset()
-        do_not_convert = {"cycles_done", "bitmap_cvg"}
+        percent_fields = {"bitmap_cvg"}
 
         any_stat = False
 
@@ -87,18 +88,18 @@ class NyxStats(StatAggregator):
                     if field_name not in self.fields:
                         continue
 
-                    if field_name in do_not_convert:
-                        self.fields[field_name].update(field_val)
-                    else:
-                        try:
-                            self.fields[field_name].update(convert_num(field_val))
-                        except ValueError as exc:
-                            # ignore errors
-                            print(
-                                f"error reading {field_name} from {stats_path}: {exc}",
-                                file=sys.stderr,
-                            )
-                            continue
+                    if field_name in percent_fields:
+                        field_val = field_val.rstrip("%")
+
+                    try:
+                        self.fields[field_name].update(convert_num(field_val))
+                    except ValueError as exc:
+                        # ignore errors
+                        print(
+                            f"error reading {field_name} from {stats_path}: {exc}",
+                            file=sys.stderr,
+                        )
+                        continue
 
                     any_stat = True
 

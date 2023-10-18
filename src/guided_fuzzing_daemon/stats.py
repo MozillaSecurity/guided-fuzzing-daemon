@@ -1,12 +1,11 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
-
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from fasteners import InterProcessLock
 from psutil import cpu_count, cpu_percent, disk_usage, virtual_memory
@@ -22,11 +21,14 @@ CPU_POLL_INTERVAL = 1
 
 
 class Field(ABC):
-    __slots__ = ("_hidden", "_generated")
+    __slots__ = ("_hidden", "_generated", "_suffix")
 
-    def __init__(self, hidden: bool = False, generated: bool = False) -> None:
+    def __init__(
+        self, hidden: bool = False, generated: bool = False, suffix: str = ""
+    ) -> None:
         self._hidden = hidden
         self._generated = generated
+        self._suffix = suffix
 
     @property
     @abstractmethod
@@ -48,7 +50,13 @@ class Field(ABC):
         pass
 
     def __str__(self) -> str:
-        return str(self.value)
+        val = self.value
+        if isinstance(val, float):
+            if val.is_integer():
+                val = int(val)
+            else:
+                return f"{val:.2f}{self._suffix}"
+        return f"{val}{self._suffix}"
 
 
 class GeneratedField(Field):
@@ -91,6 +99,31 @@ class ListField(Field):
         self._values.clear()
 
 
+class ValueCounterField(Field):
+    __slots__ = ("_values",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._values: Dict[Any, int] = {}
+
+    @property
+    def value(self) -> int:
+        return -1
+
+    def update(self, value: Any) -> None:
+        self._values.setdefault(value, 0)
+        self._values[value] += 1
+
+    def __str__(self) -> str:
+        values = []
+        for value, count in sorted(self._values.items()):
+            values.append(f"{value} ({count}×)")  # noqa: RUF001
+        return ", ".join(values)
+
+    def reset(self) -> None:
+        self._values.clear()
+
+
 class JoinField(Field):
     __slots__ = ("_fields",)
 
@@ -109,8 +142,8 @@ class JoinField(Field):
 class SumField(Field):
     __slots__ = ("_base", "_total")
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, suffix: str = "") -> None:
+        super().__init__(suffix=suffix)
         self._base = 0
         self._total = 0
 
@@ -132,8 +165,8 @@ class SumField(Field):
 class MeanField(Field):
     __slots__ = ("_sum", "_count")
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, suffix: str = "") -> None:
+        super().__init__(suffix=suffix)
         self._sum = SumField()
         self._count = 0
 
@@ -156,8 +189,8 @@ class MeanField(Field):
 class MaxField(Field):
     __slots__ = ("_value", "_ignore_reset")
 
-    def __init__(self, ignore_reset: bool = False) -> None:
-        super().__init__()
+    def __init__(self, ignore_reset: bool = False, suffix: str = "") -> None:
+        super().__init__(suffix=suffix)
         self._value: Optional[int] = None
         self._ignore_reset = ignore_reset
 
@@ -208,8 +241,8 @@ class MaxTimeField(Field):
 class MinField(Field):
     __slots__ = ("_value",)
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, suffix: str = "") -> None:
+        super().__init__(suffix=suffix)
         self._value: Optional[int] = None
 
     @property
@@ -232,10 +265,10 @@ class MinField(Field):
 class MinMaxField(Field):
     __slots__ = ("_min", "_max")
 
-    def __init__(self) -> None:
+    def __init__(self, suffix: str = "") -> None:
         super().__init__()
-        self._min = MinField()
-        self._max = MaxField()
+        self._min = MinField(suffix=suffix)
+        self._max = MaxField(suffix=suffix)
 
     @property
     def value(self) -> int:
@@ -277,6 +310,31 @@ class SumMinMaxField(Field):
         super().reset()
         self._minmax.reset()
         self._sum.reset()
+
+
+class MeanMinMaxField(Field):
+    __slots__ = ("_mean", "_minmax")
+
+    def __init__(self, suffix: str = "") -> None:
+        super().__init__()
+        self._minmax = MinMaxField(suffix=suffix)
+        self._mean = MeanField(suffix=suffix)
+
+    @property
+    def value(self) -> float:
+        return self._mean.value
+
+    def update(self, value: int) -> None:
+        self._minmax.update(value)
+        self._mean.update(value)
+
+    def __str__(self) -> str:
+        return f"{self._mean} avg ({self._minmax})"
+
+    def reset(self) -> None:
+        super().reset()
+        self._minmax.reset()
+        self._mean.reset()
 
 
 class CPUField(Field):
