@@ -341,7 +341,14 @@ def nyx_main(
                             forceCrashInstruction=False,
                             numFrames=8,
                         )
-                        result = collector.submit(crash_info, str(crash_path))
+                        result = collector.submit(
+                            crash_info,
+                            str(crash_path),
+                            metaData={
+                                "afl-instance": log.parent.parent.name,
+                                "afl-crash": crash_path.name,
+                            },
+                        )
                         print(
                             'Successfully submitted crash: "'
                             f"{result['shortSignature']}\" as {result['id']}",

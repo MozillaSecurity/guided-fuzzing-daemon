@@ -281,6 +281,7 @@ def test_nyx_04(dupe, have_collector, mocker, nyx, symbolize_ret, tmp_path):
             assert nyx.collector.submit.call_args == mocker.call(
                 nyx.crash_info.fromRawCrashData.return_value,
                 str(nyx.corpus_out / "0" / "crashes" / "crash"),
+                metaData={"afl-instance": "0", "afl-crash": "crash"},
             )
             assert nyx.collector.generate.call_count == 1
     elif not symbolize_ret:
