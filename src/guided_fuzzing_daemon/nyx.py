@@ -18,7 +18,14 @@ from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import CrashInfo
 
 from .s3 import S3Manager
-from .stats import ListField, MaxTimeField, MeanField, StatAggregator, SumField
+from .stats import (
+    ListField,
+    MaxTimeField,
+    MeanField,
+    StatAggregator,
+    SumField,
+    SumMinMaxField,
+)
 from .utils import warn_local
 
 ASAN_SYMBOLIZE = which("asan_symbolize")
@@ -29,8 +36,8 @@ QUEUE_UPLOAD_PERIOD = 7200
 class NyxStats(StatAggregator):
     def __init__(self) -> None:
         super().__init__()
-        self.add_field("execs_done", SumField())
-        self.add_field("execs_per_sec", SumField())
+        self.add_field("execs_done", SumMinMaxField())
+        self.add_field("execs_per_sec", SumMinMaxField())
         self.add_field("pending_favs", SumField())
         self.add_field("pending_total", SumField())
         self.add_field("corpus_variable", SumField())
