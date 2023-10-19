@@ -38,7 +38,6 @@ from .stats import (
     GeneratedField,
     StatAggregator,
 )
-from .utils import setup_firefox
 
 
 class S3Manager:
@@ -710,54 +709,6 @@ def s3_main(opts: Namespace) -> int:
                     sleep(0.1)
                 assert not proc.wait()
 
-            elif opts.mode == "aflfuzz":
-                assert opts.aflbindir
-
-                # Run afl-cmin
-                afl_cmin = Path(opts.aflbindir) / "afl-cmin"
-                if not afl_cmin.exists():
-                    print("error: Unable to locate afl-cmin binary.", file=sys.stderr)
-                    return 2
-
-                if opts.firefox:
-                    (ffp, ff_cmd, ff_env) = setup_firefox(
-                        Path(cmdline[0]),
-                        opts.firefox_prefs,
-                        opts.firefox_extensions,
-                        opts.firefox_testpath,
-                    )
-                    cmdline = ff_cmd
-
-                afl_cmdline = [
-                    str(afl_cmin),
-                    "-e",
-                    "-i",
-                    str(queues_dir),
-                    "-o",
-                    str(updated_tests_dir),
-                    "-t",
-                    str(opts.afl_timeout),
-                    "-m",
-                    "none",
-                ]
-
-                if opts.test_file:
-                    afl_cmdline.extend(["-f", opts.test_file])
-
-                afl_cmdline.extend(cmdline)
-
-                print("Running afl-cmin")
-                env = os.environ.copy()
-                env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
-                if opts.firefox:
-                    env.update(ff_env)
-                devnull: Optional[int] = DEVNULL
-                if opts.debug:
-                    devnull = None
-                run(afl_cmdline, stdout=devnull, env=env, check=True)
-
-                if opts.firefox:
-                    ffp.clean_up()
             else:
                 cmdline.extend(["-merge=1", str(updated_tests_dir), str(queues_dir)])
 
@@ -771,7 +722,7 @@ def s3_main(opts: Namespace) -> int:
                 print("Running libFuzzer merge")
                 env = os.environ.copy()
                 env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
-                devnull = DEVNULL
+                devnull: Optional[int] = DEVNULL
                 if opts.debug:
                     devnull = None
                 # pylint: disable=consider-using-with
