@@ -8,15 +8,6 @@ import time
 import zipfile
 from argparse import Namespace
 from pathlib import Path
-from typing import Dict, List, Tuple
-
-HAVE_FFPUPPET = True
-try:
-    from ffpuppet import FFPuppet
-    from ffpuppet.helpers import prepare_environment
-    from ffpuppet.profile import Profile
-except ImportError:
-    HAVE_FFPUPPET = False
 
 
 def apply_transform(script_path: Path, testcase_path: Path) -> Path:
@@ -52,28 +43,6 @@ def apply_transform(script_path: Path, testcase_path: Path) -> Path:
                 archive.write(str(file), arcname=file.relative_to(output_path))
 
     return Path(archive_path)
-
-
-def setup_firefox(
-    bin_path: Path, prefs_path: Path, ext_paths: List[Path], test_path: Path
-) -> Tuple["FFPuppet", List[str], Dict[str, str]]:
-    ffp = FFPuppet(use_xvfb=True)
-    ffp.profile = Profile(
-        browser_bin=bin_path, extension=ext_paths, prefs_js=prefs_path
-    )
-
-    env = prepare_environment(bin_path.parent, bin_path.parent)
-    cmd = ffp.build_launch_cmd(str(bin_path), additional_args=[str(test_path)])
-
-    try:
-        # Remove any custom ASan options passed by FFPuppet as they might
-        # interfere with AFL. This should be removed once we can ensure
-        # that options passed by FFPuppet work with AFL.
-        del env["ASAN_OPTIONS"]
-    except KeyError:
-        pass
-
-    return (ffp, cmd, env)
 
 
 def test_binary_asan(bin_path: Path) -> bool:

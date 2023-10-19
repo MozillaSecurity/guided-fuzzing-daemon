@@ -24,7 +24,6 @@ def test_main_01(mocker, arg):
     args_mock = mocker.patch("guided_fuzzing_daemon.main.parse_args")
     mocker.patch("guided_fuzzing_daemon.main.Collector")
     mocker.patch("guided_fuzzing_daemon.main.S3Manager")
-    mocker.patch("guided_fuzzing_daemon.main.aflfuzz_main")
     mocker.patch("guided_fuzzing_daemon.main.libfuzzer_main")
     mocker.patch("guided_fuzzing_daemon.main.nyx_main")
     s3_main_mock = mocker.patch("guided_fuzzing_daemon.main.s3_main")
@@ -40,7 +39,6 @@ def test_main_02(capsys, mocker):
     args_mock = mocker.patch("guided_fuzzing_daemon.main.parse_args")
     mocker.patch("guided_fuzzing_daemon.main.Collector")
     mocker.patch("guided_fuzzing_daemon.main.S3Manager")
-    mocker.patch("guided_fuzzing_daemon.main.aflfuzz_main")
     mocker.patch("guided_fuzzing_daemon.main.libfuzzer_main")
     mocker.patch("guided_fuzzing_daemon.main.nyx_main")
     mocker.patch("guided_fuzzing_daemon.main.s3_main")
@@ -52,14 +50,13 @@ def test_main_02(capsys, mocker):
     assert "Unhandled case" in stdio.err
 
 
-@pytest.mark.parametrize("mode", ("libfuzzer", "aflfuzz", "nyx"))
+@pytest.mark.parametrize("mode", ("libfuzzer", "nyx"))
 def test_main_03(mode, mocker):
     """fuzzer modes"""
     args_mock = mocker.patch("guided_fuzzing_daemon.main.parse_args")
     mocker.patch("guided_fuzzing_daemon.main.Collector")
     mocker.patch("guided_fuzzing_daemon.main.S3Manager")
     mocks = {
-        "aflfuzz": mocker.patch("guided_fuzzing_daemon.main.aflfuzz_main"),
         "libfuzzer": mocker.patch("guided_fuzzing_daemon.main.libfuzzer_main"),
         "nyx": mocker.patch("guided_fuzzing_daemon.main.nyx_main"),
     }
@@ -77,7 +74,6 @@ def test_main_04(mocker, tmp_path):
     args_mock = mocker.patch("guided_fuzzing_daemon.main.parse_args")
     collector_mock = mocker.patch("guided_fuzzing_daemon.main.Collector")
     mocker.patch("guided_fuzzing_daemon.main.S3Manager")
-    mocker.patch("guided_fuzzing_daemon.main.aflfuzz_main")
     mocker.patch("guided_fuzzing_daemon.main.libfuzzer_main")
     mocker.patch("guided_fuzzing_daemon.main.nyx_main")
     mocker.patch("guided_fuzzing_daemon.main.s3_main")

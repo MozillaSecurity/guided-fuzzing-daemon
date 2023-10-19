@@ -8,8 +8,6 @@ from pathlib import Path
 from shutil import which
 from typing import List, Optional
 
-from .utils import HAVE_FFPUPPET
-
 
 def _check_log_pattern(
     instances: int, pattern: str, arg_name: str, parser: ArgumentParser
@@ -41,7 +39,7 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     # setup argparser
     parser = ArgumentParser(
         usage=(
-            f"{program_name} --libfuzzer or --nyx or --aflfuzz [OPTIONS] "
+            f"{program_name} --libfuzzer or --nyx [OPTIONS] "
             "--cmd <COMMAND AND ARGUMENTS>"
         )
     )
@@ -88,13 +86,6 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         const="libfuzzer",
         dest="mode",
         help="Enable libFuzzer mode",
-    )
-    mode_group.add_argument(
-        "--aflfuzz",
-        action="store_const",
-        const="aflfuzz",
-        dest="mode",
-        help="Enable AFL mode",
     )
     mode_group.add_argument(
         "--nyx",
@@ -449,12 +440,6 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         parser.print_help(sys.stderr)
         parser.exit(2)
 
-    # For backwards compatibility, --aflfuzz is the default if nothing else is
-    # specified.
-    parser.set_defaults(
-        mode="aflfuzz",
-    )
-
     opts = parser.parse_args(argv)
 
     # try to find afl-fuzz if --afl-binary-dir not given
@@ -513,41 +498,5 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     if opts.libfuzzer_auto_reduce is not None:
         if opts.libfuzzer_auto_reduce < 5:
             parser.error("Auto reduce threshold should at least be 5%.")
-
-    if opts.mode == "aflfuzz":
-        if opts.cmd and not opts.firefox:
-            parser.error("Use --cmd either with libfuzzer or with afl in firefox mode")
-
-        if opts.firefox or opts.firefox_start_afl:
-            if not HAVE_FFPUPPET:
-                parser.error(
-                    "--firefox and --firefox-start-afl require FFPuppet to be "
-                    "installed"
-                )
-
-            if opts.custom_cmdline_file:
-                parser.error(
-                    "--custom-cmdline-file is incompatible with firefox options"
-                )
-
-            if not opts.firefox_prefs or not opts.firefox_testpath:
-                parser.error(
-                    "--firefox and --firefox-start-afl require --firefox-prefs "
-                    "and --firefox-testpath to be specified"
-                )
-
-        if opts.firefox_start_afl:
-            if not opts.aflbindir:
-                parser.error(
-                    "Must specify --afl-binary-dir for starting AFL with firefox"
-                )
-
-        # Upload and FuzzManager modes require specifying the AFL directory
-        if opts.s3_queue_upload or opts.fuzzmanager:
-            if not opts.afloutdir:
-                parser.error("Must specify AFL output directory using --afl-output-dir")
-
-        if opts.s3_corpus_refresh and not opts.aflbindir:
-            parser.error("Must specify --afl-binary-dir for refreshing the test corpus")
 
     return opts

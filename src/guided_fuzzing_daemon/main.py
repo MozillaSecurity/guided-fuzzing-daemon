@@ -19,7 +19,6 @@ from typing import List, Optional
 
 from Collector.Collector import Collector
 
-from .afl import aflfuzz_main
 from .args import parse_args
 from .libfuzzer import libfuzzer_main
 from .nyx import nyx_main
@@ -74,9 +73,6 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if opts.mode == "libfuzzer":
         return libfuzzer_main(opts, collector, s3m)
-
-    if opts.mode == "aflfuzz":
-        return aflfuzz_main(opts, collector, s3m)
 
     if opts.mode == "nyx":
         return nyx_main(opts, collector, s3m)
