@@ -487,11 +487,12 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
             parser.error("Must specify --sharedir with --nyx")
         if not opts.aflbindir:
             parser.error("Must specify --afl-binary-dir for Nyx mode")
-        if not opts.corpus_in or not opts.corpus_in.is_dir():
-            parser.error("Must specify --corpus-in with --nyx")
-        if not opts.corpus_out:
-            # don't check existence, main() will auto-create
-            parser.error("Must specify --corpus-out with --nyx")
+        if not opts.s3_corpus_refresh:
+            if not opts.corpus_in or not opts.corpus_in.is_dir():
+                parser.error("Must specify --corpus-in with --nyx")
+            if not opts.corpus_out:
+                # don't check existence, main() will auto-create
+                parser.error("Must specify --corpus-out with --nyx")
         if opts.nyx_log_pattern is not None:
             _check_log_pattern(
                 opts.nyx_instances, opts.nyx_log_pattern, "--nyx-log-pattern", parser
