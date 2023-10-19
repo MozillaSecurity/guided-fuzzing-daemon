@@ -599,35 +599,36 @@ def s3_main(opts: Namespace) -> int:
             build_path = corpus_path / "build"
             s3m.download_build(build_path)
 
-        cmdline = (corpus_path / "cmdline").read_text().splitlines()
+        if opts.mode != "nyx":
+            cmdline = (corpus_path / "cmdline").read_text().splitlines()
 
-        # Assume cmdline[0] is the name of the binary
-        binary_name = Path(cmdline[0]).name
+            # Assume cmdline[0] is the name of the binary
+            binary_name = Path(cmdline[0]).name
 
-        # Try locating our binary in the build we just unpacked
-        binary_search_result = [
-            file
-            for file in build_path.glob("**/*")
-            if file.is_file()
-            and file.name == binary_name
-            and (stat.S_IXUSR & file.stat().st_mode)
-        ]
+            # Try locating our binary in the build we just unpacked
+            binary_search_result = [
+                file
+                for file in build_path.glob("**/*")
+                if file.is_file()
+                and file.name == binary_name
+                and (stat.S_IXUSR & file.stat().st_mode)
+            ]
 
-        if not binary_search_result:
-            print(
-                f"error: Failed to locate binary {binary_name} in unpacked build.",
-                file=sys.stderr,
-            )
-            return 2
+            if not binary_search_result:
+                print(
+                    f"error: Failed to locate binary {binary_name} in unpacked build.",
+                    file=sys.stderr,
+                )
+                return 2
 
-        if len(binary_search_result) > 1:
-            print(
-                f"error: Binary name {binary_name} is ambiguous in unpacked build.",
-                file=sys.stderr,
-            )
-            return 2
+            if len(binary_search_result) > 1:
+                print(
+                    f"error: Binary name {binary_name} is ambiguous in unpacked build.",
+                    file=sys.stderr,
+                )
+                return 2
 
-        cmdline[0] = str(binary_search_result[0])
+            cmdline[0] = str(binary_search_result[0])
 
         # Download our current corpus into the queues directory as well
         print(
