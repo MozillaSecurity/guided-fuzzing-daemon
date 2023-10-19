@@ -207,16 +207,19 @@ def test_nyx_03b(capsys, nyx):
 
 
 @pytest.mark.parametrize(
-    "dupe, have_collector, symbolize_ret",
+    "dupe, fail_last_line, have_collector, symbolize_ret",
     [
-        pytest.param(False, False, 0, id="no-collector"),
-        pytest.param(True, True, 0, id="dupe"),
-        pytest.param(False, True, 0, id="report"),
-        pytest.param(False, False, 1, id="no-sym-no-collector"),
-        pytest.param(False, True, 1, id="no-sym-report"),
+        pytest.param(False, False, False, 0, id="no-collector"),
+        pytest.param(True, False, True, 0, id="dupe"),
+        pytest.param(False, False, True, 0, id="report"),
+        pytest.param(False, False, False, 1, id="no-sym-no-collector"),
+        pytest.param(False, False, True, 1, id="no-sym-report"),
+        pytest.param(False, True, True, 0, id="retry-last-line"),
     ],
 )
-def test_nyx_04(dupe, have_collector, mocker, nyx, symbolize_ret, tmp_path):
+def test_nyx_04a(
+    dupe, fail_last_line, have_collector, mocker, nyx, symbolize_ret, tmp_path
+):
     """nyx crashes are symbolized and reported"""
     # setup
     nyx.sleep.side_effect = chain(repeat(None, 64), [NyxMainBreak, None])
@@ -225,6 +228,15 @@ def test_nyx_04(dupe, have_collector, mocker, nyx, symbolize_ret, tmp_path):
     nyx.run.return_value.stderr = "error\n"
     nyx.run.return_value.returncode = symbolize_ret
     orig_popen_cb = nyx.popen.side_effect
+
+    if fail_last_line:
+
+        def from_raw_mock(*_args, **kwds):
+            if "blah" in kwds["auxCrashData"]:
+                raise RuntimeError()
+            return mocker.DEFAULT
+
+        nyx.crash_info.fromRawCrashData.side_effect = from_raw_mock
 
     def popen_create_crash(*args, **kwds):
         result = orig_popen_cb(*args, **kwds)
@@ -269,13 +281,20 @@ def test_nyx_04(dupe, have_collector, mocker, nyx, symbolize_ret, tmp_path):
         if dupe:
             assert nyx.collector.submit.call_count == 0
         else:
-            assert nyx.crash_info.fromRawCrashData.call_count == 1
+            if fail_last_line:
+                assert nyx.crash_info.fromRawCrashData.call_count == 2
+                stderr = ["blah"]
+                crashdata = "".join(inp_log.splitlines(keepends=True)[:-1])
+            else:
+                assert nyx.crash_info.fromRawCrashData.call_count == 1
+                stderr = []
+                # if symbolizer failed, crashdata should be unsymbolized
+                crashdata = kwds["input"] if symbolize_ret else inp_log
             assert nyx.crash_info.fromRawCrashData.call_args == mocker.call(
                 [],
-                [],
+                stderr,
                 nyx.cfg.fromBinary.return_value,
-                # if symbolizer failed, crashdata should be unsymbolized
-                auxCrashData=kwds["input"] if symbolize_ret else inp_log,
+                auxCrashData=crashdata,
             )
             assert nyx.collector.submit.call_count == 1
             assert nyx.collector.submit.call_args == mocker.call(
@@ -293,6 +312,66 @@ def test_nyx_04(dupe, have_collector, mocker, nyx, symbolize_ret, tmp_path):
 
     else:
         assert not (nyx.corpus_out / "0" / "crashes" / "crash.log.symbolized").is_file()
+
+
+@pytest.mark.parametrize(
+    "inp_log",
+    ("ld_preload_fuzz_no_pt.so\n/home/user/firefox/firefox\nblah\nblah\n", "blah\n"),
+)
+def test_nyx_04b(inp_log, mocker, nyx):
+    """nyx crash processing corner cases"""
+    # setup
+    nyx.sleep.side_effect = chain(repeat(None, 64), [NyxMainBreak, None])
+    nyx.run.return_value.stdout = inp_log
+    nyx.run.return_value.stderr = "error\n"
+    nyx.run.return_value.returncode = 0
+    orig_popen_cb = nyx.popen.side_effect
+
+    def from_raw_mock(*_args, **kwds):
+        if "blah" in kwds["auxCrashData"]:
+            raise RuntimeError()
+        return mocker.DEFAULT
+
+    nyx.crash_info.fromRawCrashData.side_effect = from_raw_mock
+
+    def popen_create_crash(*args, **kwds):
+        result = orig_popen_cb(*args, **kwds)
+        (nyx.corpus_out / "0" / "crashes" / "crash").touch()
+        (nyx.corpus_out / "0" / "crashes" / "crash.log").write_text(inp_log)
+        return result
+
+    nyx.popen.side_effect = popen_create_crash
+    nyx.collector.search.return_value = (None, None)
+    nyx.collector.submit.return_value = {
+        "id": 1234,
+        "shortSignature": "SecurityError: this looks bad",
+    }
+
+    # test
+    with pytest.raises(RuntimeError):
+        nyx.main()
+
+    # check
+    assert nyx.run.call_count == 1
+    if len(inp_log.splitlines()) == 1:
+        assert nyx.crash_info.fromRawCrashData.call_count == 1
+        assert nyx.crash_info.fromRawCrashData.call_args == mocker.call(
+            [],
+            [],
+            nyx.cfg.fromBinary.return_value,
+            auxCrashData=inp_log,
+        )
+    else:
+        assert nyx.crash_info.fromRawCrashData.call_count == 2
+        crashdata = "".join(inp_log.splitlines(keepends=True)[:-1])
+        assert nyx.crash_info.fromRawCrashData.call_args == mocker.call(
+            [],
+            ["blah"],
+            nyx.cfg.fromBinary.return_value,
+            auxCrashData=crashdata,
+        )
+    assert nyx.collector.submit.call_count == 0
+    assert nyx.collector.generate.call_count == 0
 
 
 def test_nyx_05(mocker, nyx):

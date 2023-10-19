@@ -328,9 +328,33 @@ def nyx_main(
                 else:
                     log_content = symbolized = sym_result.stdout
                 if collector is not None:
-                    crash_info = CrashInfo.fromRawCrashData(
-                        [], [], bin_config, auxCrashData=log_content
-                    )
+                    try:
+                        crash_info = CrashInfo.fromRawCrashData(
+                            [], [], bin_config, auxCrashData=log_content
+                        )
+                    except RuntimeError as exc:
+                        # try again with the last line omitted
+                        print(
+                            f"CrashInfo.fromRawCrashData raised RuntimeError: {exc}",
+                            file=sys.stderr,
+                        )
+                        print("original crash data", file=sys.stderr)
+                        print("=" * 20, file=sys.stderr)
+                        sys.stderr.write(log_content)
+                        print("=" * 20, file=sys.stderr)
+                        log_lines = log_content.splitlines(keepends=True)
+                        if len(log_lines) > 1:
+                            log_content = "".join(log_lines[:-1])
+                            last_line = log_lines[-1].strip()
+                            print(
+                                f"Retrying without last line: {last_line}",
+                                file=sys.stderr,
+                            )
+                            crash_info = CrashInfo.fromRawCrashData(
+                                [], [last_line], bin_config, auxCrashData=log_content
+                            )
+                        else:
+                            raise
 
                     (sigfile, metadata) = collector.search(crash_info)
 
