@@ -33,6 +33,7 @@ def test_s3_main_01(mocker, arg, method):
 
 def test_s3_main_02(mocker, tmp_path):
     """s3 corpus refresh"""
+    mocker.patch("guided_fuzzing_daemon.s3.StatAggregator", autospec=True)
     mgr = mocker.patch("guided_fuzzing_daemon.s3.S3Manager")
     args = mocker.Mock()
     args.mode = "libfuzzer"
@@ -51,12 +52,14 @@ def test_s3_main_02(mocker, tmp_path):
 
     def fake_run(*_args, **_kwds):
         (tmp_path / "tests" / "test").touch()
+        return mocker.DEFAULT
 
     (tmp_path / "queues").mkdir()
     binary = tmp_path / "build" / "firefox"
     binary.touch()
     binary.chmod(0o777)
-    mocker.patch("guided_fuzzing_daemon.s3.run", side_effect=fake_run)
+    popen = mocker.patch("guided_fuzzing_daemon.s3.Popen", side_effect=fake_run)
+    popen.return_value.wait.return_value = 0
     assert s3_main(args) == 0
     assert mgr.return_value.method_calls == [
         mocker.call.clean_queue_dirs(),
@@ -69,6 +72,7 @@ def test_s3_main_02(mocker, tmp_path):
 
 def test_s3_main_03(mocker, tmp_path):
     """Nyx S3 corpus refresh"""
+    mocker.patch("guided_fuzzing_daemon.s3.StatAggregator", autospec=True)
     mgr = mocker.patch("guided_fuzzing_daemon.s3.S3Manager")
     args = mocker.Mock()
     args.mode = "nyx"
@@ -87,12 +91,14 @@ def test_s3_main_03(mocker, tmp_path):
 
     def fake_run(*_args, **_kwds):
         (tmp_path / "tests" / "test").touch()
+        return mocker.DEFAULT
 
     (tmp_path / "queues").mkdir()
     binary = tmp_path / "build" / "firefox"
     binary.touch()
     binary.chmod(0o777)
-    mocker.patch("guided_fuzzing_daemon.s3.run", side_effect=fake_run)
+    popen = mocker.patch("guided_fuzzing_daemon.s3.Popen", side_effect=fake_run)
+    popen.return_value.wait.return_value = 0
     assert s3_main(args) == 2
     (tmp_path / "afl-cmin").touch()
     mgr.reset_mock()

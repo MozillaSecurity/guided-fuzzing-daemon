@@ -22,11 +22,11 @@ import random
 import shutil
 import stat
 import sys
-import time
 from argparse import Namespace
 from pathlib import Path, PurePosixPath
-from subprocess import DEVNULL, run
+from subprocess import DEVNULL, Popen, run
 from tempfile import mkstemp
+from time import sleep, time
 from typing import Dict, Iterable, Optional, Set
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -34,6 +34,10 @@ from boto.s3.connection import S3Connection
 from boto.s3.key import Key
 from boto.utils import parse_ts as boto_parse_ts
 
+from .stats import (
+    GeneratedField,
+    StatAggregator,
+)
 from .utils import setup_firefox
 
 
@@ -182,7 +186,7 @@ class S3Manager:
         cmdline_file = base_path / "cmdline"
         self.__upload_queue_files(queue_path, queue_files, base_path, cmdline_file)
 
-    def download_queue_dirs(self, work_path: Path) -> None:
+    def download_queue_dirs(self, work_path: Path) -> Dict[str, int]:
         """Downloads all queue files into the queues sub directory of the specified
         local work directory. The files are renamed to match their SHA1 hashes
         to avoid file collisions.
@@ -191,9 +195,14 @@ class S3Manager:
 
         Args:
             work_path: Local work directory
+
+        Returns:
+            {queue: count} statistics for what was downloaded
         """
         download_path = work_path / "queues"
         download_path.mkdir(exist_ok=True)
+
+        queue_counts: Dict[str, int] = {}
 
         remote_keys = list(self.bucket.list(self.remote_path_queues))
 
@@ -242,6 +251,11 @@ class S3Manager:
             hash_name = hashlib.sha1(tmp_file.read_bytes()).hexdigest()
 
             tmp_file.rename(download_path / hash_name)
+
+            queue_counts.setdefault(queue_name, 0)
+            queue_counts[queue_name] += 1
+
+        return queue_counts
 
     def clean_queue_dirs(self) -> None:
         """Delete all closed remote queues."""
@@ -373,7 +387,7 @@ class S3Manager:
 
     def download_corpus(
         self, corpus_dir: Path, random_subset_size: Optional[int] = None
-    ) -> None:
+    ) -> int:
         """Downloads the test corpus from the specified S3 bucket and project
         into the specified directory, without overwriting any files.
 
@@ -381,6 +395,9 @@ class S3Manager:
             corpus_dir: Directory where to store test corpus files
             random_subset_size: If specified, only download a random subset of
                                 the corpus, with the specified size.
+
+        Returns:
+            corpus size downloaded
         """
         corpus_dir.mkdir(exist_ok=True)
 
@@ -406,8 +423,10 @@ class S3Manager:
                                 file=sys.stderr,
                             )
                         else:
+                            before = set(corpus_dir.iterdir())
                             zip_file.extractall(str(corpus_dir))
-                            return
+                            after = set(corpus_dir.iterdir())
+                            return len(after - before)
                 finally:
                     os.remove(zip_dest)
 
@@ -416,11 +435,14 @@ class S3Manager:
         if random_subset_size and len(remote_keys) > random_subset_size:
             remote_keys = random.sample(remote_keys, random_subset_size)
 
+        result = 0
         for remote_key in remote_keys:
             dest_file = corpus_dir / PurePosixPath(remote_key.name).name
 
             if not dest_file.exists():
                 remote_key.get_contents_to_filename(str(dest_file))
+                result += 1
+        return result
 
     def upload_corpus(self, corpus_dir: Path, corpus_delete: bool = False) -> None:
         """Synchronize the specified test corpus directory to the specified S3 bucket.
@@ -497,7 +519,7 @@ class S3Manager:
         if refresh or not id_file.exists():
             hasher = hashlib.new("sha1")
             hasher.update(platform.node().encode("utf-8"))
-            hasher.update(str(time.time()).encode("utf-8"))
+            hasher.update(str(time()).encode("utf-8"))
             digest = hasher.hexdigest()
             id_file.write_text(digest)
             return digest
@@ -565,6 +587,11 @@ def s3_main(opts: Namespace) -> int:
 
     elif opts.s3_corpus_refresh:
         corpus_path = Path(opts.s3_corpus_refresh)
+        refresh_stats = StatAggregator()
+        refresh_stats.add_field("queue_files", GeneratedField())
+        refresh_stats.add_field("corpus_pre", GeneratedField())
+        refresh_stats.add_field("corpus_post", GeneratedField())
+        refresh_stats.add_sys_stats()
 
         corpus_path.mkdir(parents=True, exist_ok=True)
 
@@ -577,7 +604,8 @@ def s3_main(opts: Namespace) -> int:
             f"Downloading queues from s3://{opts.s3_bucket}/{opts.project}/queues/ to "
             f"{queues_dir}"
         )
-        s3m.download_queue_dirs(opts.s3_corpus_refresh)
+        queue_stats = s3m.download_queue_dirs(opts.s3_corpus_refresh)
+        refresh_stats.fields["queue_files"].update(sum(queue_stats.values()))
 
         cmdline_file = corpus_path / "cmdline"
         if not cmdline_file.exists():
@@ -635,7 +663,8 @@ def s3_main(opts: Namespace) -> int:
             f"Downloading corpus from s3://{opts.s3_bucket}/{opts.project}/corpus/ to "
             f"{queues_dir}"
         )
-        s3m.download_corpus(queues_dir)
+        corpus_size = s3m.download_corpus(queues_dir)
+        refresh_stats.fields["corpus_pre"].update(corpus_size)
 
         # Ensure the directory for our new tests is empty
         updated_tests_dir = corpus_path / "tests"
@@ -643,99 +672,126 @@ def s3_main(opts: Namespace) -> int:
             shutil.rmtree(str(updated_tests_dir))
         updated_tests_dir.mkdir()
 
-        if opts.mode == "nyx":
-            assert opts.aflbindir.is_dir()
-            assert opts.sharedir.is_dir()
+        try:
+            if opts.mode == "nyx":
+                assert opts.aflbindir.is_dir()
+                assert opts.sharedir.is_dir()
 
-            # Run afl-cmin
-            afl_cmin = Path(opts.aflbindir) / "afl-cmin"
-            if not afl_cmin.exists():
-                print("error: Unable to locate afl-cmin binary.", file=sys.stderr)
-                return 2
+                # Run afl-cmin
+                afl_cmin = Path(opts.aflbindir) / "afl-cmin"
+                if not afl_cmin.exists():
+                    print("error: Unable to locate afl-cmin binary.", file=sys.stderr)
+                    return 2
 
-            afl_cmdline = [
-                str(afl_cmin),
-                "-e",
-                "-i",
-                str(queues_dir),
-                "-o",
-                str(updated_tests_dir),
-                "-t",
-                str(opts.afl_timeout),
-                "-m",
-                "none",
-                "-X",
-                str(opts.sharedir),
-            ]
+                afl_cmdline = [
+                    str(afl_cmin),
+                    "-e",
+                    "-i",
+                    str(queues_dir),
+                    "-o",
+                    str(updated_tests_dir),
+                    "-t",
+                    str(opts.afl_timeout),
+                    "-m",
+                    "none",
+                    "-X",
+                    str(opts.sharedir),
+                ]
 
-            print("Running afl-cmin")
-            run(afl_cmdline, stdout=None if opts.debug else DEVNULL, check=True)
+                print("Running afl-cmin")
+                # pylint: disable=consider-using-with
+                proc = Popen(afl_cmdline, stdout=None if opts.debug else DEVNULL)
+                last_stats_report = 0.0
+                while proc.poll() is None:
+                    # Calculate stats
+                    if opts.stats and last_stats_report < time() - 30:
+                        refresh_stats.write_file(opts.stats, [])
+                    last_stats_report = time()
+                    sleep(0.1)
+                assert not proc.wait()
 
-        elif opts.mode == "aflfuzz":
-            assert opts.aflbindir
+            elif opts.mode == "aflfuzz":
+                assert opts.aflbindir
 
-            # Run afl-cmin
-            afl_cmin = Path(opts.aflbindir) / "afl-cmin"
-            if not afl_cmin.exists():
-                print("error: Unable to locate afl-cmin binary.", file=sys.stderr)
-                return 2
+                # Run afl-cmin
+                afl_cmin = Path(opts.aflbindir) / "afl-cmin"
+                if not afl_cmin.exists():
+                    print("error: Unable to locate afl-cmin binary.", file=sys.stderr)
+                    return 2
 
-            if opts.firefox:
-                (ffp, ff_cmd, ff_env) = setup_firefox(
-                    Path(cmdline[0]),
-                    opts.firefox_prefs,
-                    opts.firefox_extensions,
-                    opts.firefox_testpath,
-                )
-                cmdline = ff_cmd
+                if opts.firefox:
+                    (ffp, ff_cmd, ff_env) = setup_firefox(
+                        Path(cmdline[0]),
+                        opts.firefox_prefs,
+                        opts.firefox_extensions,
+                        opts.firefox_testpath,
+                    )
+                    cmdline = ff_cmd
 
-            afl_cmdline = [
-                str(afl_cmin),
-                "-e",
-                "-i",
-                str(queues_dir),
-                "-o",
-                str(updated_tests_dir),
-                "-t",
-                str(opts.afl_timeout),
-                "-m",
-                "none",
-            ]
+                afl_cmdline = [
+                    str(afl_cmin),
+                    "-e",
+                    "-i",
+                    str(queues_dir),
+                    "-o",
+                    str(updated_tests_dir),
+                    "-t",
+                    str(opts.afl_timeout),
+                    "-m",
+                    "none",
+                ]
 
-            if opts.test_file:
-                afl_cmdline.extend(["-f", opts.test_file])
+                if opts.test_file:
+                    afl_cmdline.extend(["-f", opts.test_file])
 
-            afl_cmdline.extend(cmdline)
+                afl_cmdline.extend(cmdline)
 
-            print("Running afl-cmin")
-            env = os.environ.copy()
-            env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
-            if opts.firefox:
-                env.update(ff_env)
-            devnull: Optional[int] = DEVNULL
-            if opts.debug:
-                devnull = None
-            run(afl_cmdline, stdout=devnull, env=env, check=True)
+                print("Running afl-cmin")
+                env = os.environ.copy()
+                env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
+                if opts.firefox:
+                    env.update(ff_env)
+                devnull: Optional[int] = DEVNULL
+                if opts.debug:
+                    devnull = None
+                run(afl_cmdline, stdout=devnull, env=env, check=True)
 
-            if opts.firefox:
-                ffp.clean_up()
-        else:
-            cmdline.extend(["-merge=1", str(updated_tests_dir), str(queues_dir)])
+                if opts.firefox:
+                    ffp.clean_up()
+            else:
+                cmdline.extend(["-merge=1", str(updated_tests_dir), str(queues_dir)])
 
-            # Filter out any -dict arguments that we don't need anyway for merging
-            cmdline = [x for x in cmdline if not x.startswith("-dict=")]
+                # Filter out any -dict arguments that we don't need anyway for merging
+                cmdline = [x for x in cmdline if not x.startswith("-dict=")]
 
-            # Filter out any -max_len arguments because the length should only be
-            # enforced by the instance(s) doing the actual testing.
-            cmdline = [x for x in cmdline if not x.startswith("-max_len=")]
+                # Filter out any -max_len arguments because the length should only be
+                # enforced by the instance(s) doing the actual testing.
+                cmdline = [x for x in cmdline if not x.startswith("-max_len=")]
 
-            print("Running libFuzzer merge")
-            env = os.environ.copy()
-            env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
-            devnull = DEVNULL
-            if opts.debug:
-                devnull = None
-            run(cmdline, stdout=devnull, env=env, check=True)
+                print("Running libFuzzer merge")
+                env = os.environ.copy()
+                env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
+                devnull = DEVNULL
+                if opts.debug:
+                    devnull = None
+                # pylint: disable=consider-using-with
+                proc = Popen(cmdline, stdout=devnull, env=env)
+                last_stats_report = 0.0
+                while proc.poll() is None:
+                    # Calculate stats
+                    if opts.stats and last_stats_report < time() - 30:
+                        refresh_stats.write_file(opts.stats, [])
+                    last_stats_report = time()
+                    sleep(0.1)
+                assert not proc.wait()
+
+            refresh_stats.fields["corpus_post"].update(
+                sum(1 for _ in updated_tests_dir.iterdir())
+            )
+
+        finally:
+            if opts.stats:
+                refresh_stats.write_file(opts.stats, [])
 
         if not any(updated_tests_dir.iterdir()):
             print(

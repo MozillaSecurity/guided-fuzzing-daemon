@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
+from time import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from fasteners import InterProcessLock
@@ -80,6 +81,21 @@ class GeneratedField(Field):
     @property
     def value(self) -> int:
         return self._value
+
+
+class TimeField(Field):
+    __slots__: Tuple[str, ...] = ()
+
+    @property
+    def value(self) -> Union[float, int]:
+        return time()
+
+    def __str__(self) -> str:
+        return (
+            datetime.fromtimestamp(self.value, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
 
 
 class ListField(Field):
@@ -216,7 +232,7 @@ class MaxField(Field):
             self._value = None
 
 
-class MaxTimeField(Field):
+class MaxTimeField(TimeField):
     __slots__ = ("_max",)
 
     def __init__(self, ignore_reset: bool = False) -> None:
@@ -229,13 +245,6 @@ class MaxTimeField(Field):
 
     def update(self, value: int) -> None:
         self._max.update(value)
-
-    def __str__(self) -> str:
-        return (
-            datetime.fromtimestamp(self._max.value, tz=timezone.utc)
-            .isoformat()
-            .replace("+00:00", "Z")
-        )
 
     def reset(self) -> None:
         super().reset()
@@ -428,6 +437,7 @@ class StatAggregator:
         self.add_field("cpu/load" if HAVE_GETLOADAVG else "cpu", CPUField())
         self.add_field("memory", MemoryField())
         self.add_field("disk", DiskField())
+        self.add_field("updated", TimeField())
 
     def write_file(
         self,
