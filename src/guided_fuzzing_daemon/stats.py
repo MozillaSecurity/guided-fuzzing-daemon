@@ -4,6 +4,7 @@
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from datetime import datetime, timezone
+from math import isnan
 from pathlib import Path
 from time import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
@@ -45,7 +46,7 @@ class Field(ABC):
         return self._generated
 
     def update(self, _value: Any) -> None:
-        raise NotImplementedError()
+        raise NotImplementedError()  # pragma: no cover
 
     def reset(self) -> None:
         pass
@@ -61,10 +62,13 @@ class Field(ABC):
 
 
 class GeneratedField(Field):
-    __slots__ = ("_value",)
+    __slots__ = ("_ignore_reset", "_value")
 
-    def __init__(self, hidden: bool = False, suffix: str = "") -> None:
+    def __init__(
+        self, hidden: bool = False, ignore_reset: bool = False, suffix: str = ""
+    ) -> None:
         super().__init__(hidden=hidden, generated=True, suffix=suffix)
+        self._ignore_reset = ignore_reset
         self._value: int = 0
 
     def __iadd__(self, value: int) -> "GeneratedField":
@@ -78,6 +82,11 @@ class GeneratedField(Field):
     def update(self, value: int) -> None:
         self._value = value
 
+    def reset(self) -> None:
+        if not self._ignore_reset:
+            super().reset()
+            self._value = 0
+
     @property
     def value(self) -> int:
         return self._value
@@ -85,6 +94,9 @@ class GeneratedField(Field):
 
 class TimeField(Field):
     __slots__: Tuple[str, ...] = ()
+
+    def __init__(self, generated: bool = True) -> None:
+        super().__init__(generated=generated)
 
     @property
     def value(self) -> Union[float, int]:
@@ -116,6 +128,7 @@ class ListField(Field):
         return " ".join(self._values)
 
     def reset(self) -> None:
+        super().reset()
         self._values.clear()
 
 
@@ -141,6 +154,7 @@ class ValueCounterField(Field):
         return ", ".join(values)
 
     def reset(self) -> None:
+        super().reset()
         self._values.clear()
 
 
@@ -158,6 +172,11 @@ class JoinField(Field):
     def __str__(self) -> str:
         return ", ".join(str(field) for field in self._fields)
 
+    def reset(self) -> None:
+        super().reset()
+        for field in self._fields:
+            field.reset()
+
 
 class SumField(Field):
     __slots__ = ("_base", "_total")
@@ -172,7 +191,9 @@ class SumField(Field):
         return self._total
 
     def add_to_base(self, value: int) -> None:
+        self._total -= self._base
         self._base += value
+        self._total += self._base
 
     def update(self, value: int) -> None:
         self._total += value
@@ -236,12 +257,17 @@ class MaxTimeField(TimeField):
     __slots__ = ("_max",)
 
     def __init__(self, ignore_reset: bool = False) -> None:
-        super().__init__()
+        super().__init__(generated=False)
         self._max = MaxField(ignore_reset)
 
     @property
     def value(self) -> Union[float, int]:
         return self._max.value
+
+    def __str__(self) -> str:
+        if isnan(self.value):
+            return "never"
+        return super().__str__()
 
     def update(self, value: int) -> None:
         self._max.update(value)
@@ -303,10 +329,10 @@ class MinMaxField(Field):
 class SumMinMaxField(Field):
     __slots__ = ("_minmax", "_sum")
 
-    def __init__(self) -> None:
+    def __init__(self, suffix: str = "") -> None:
         super().__init__()
-        self._minmax = MinMaxField()
-        self._sum = SumField()
+        self._minmax = MinMaxField(suffix=suffix)
+        self._sum = SumField(suffix=suffix)
 
     @property
     def value(self) -> int:
@@ -358,7 +384,7 @@ class CPUField(Field):
 
     @property
     def value(self) -> int:
-        return -1
+        return -1  # pragma: no cover
 
     def __str__(self) -> str:
         # CPU and load
@@ -383,7 +409,7 @@ class MemoryField(Field):
 
     @property
     def value(self) -> int:
-        return -1
+        return -1  # pragma: no cover
 
     def __str__(self) -> str:
         # memory usage
@@ -405,7 +431,7 @@ class DiskField(Field):
 
     @property
     def value(self) -> int:
-        return -1
+        return -1  # pragma: no cover
 
     def __str__(self) -> str:
         # disk usage

@@ -204,11 +204,11 @@ class LibFuzzerStats(StatAggregator):
         self.add_field("execs_done", SumField())
         self.add_field("execs_per_sec", SumMinMaxField())
         self.add_field("rss_mb", SumMinMaxField())
-        self.add_field("corpus_size", GeneratedField())
-        self.add_field("next_auto_reduce", GeneratedField())
-        self.add_field("crashes", GeneratedField(hidden=True))
-        self.add_field("timeouts", GeneratedField(hidden=True))
-        self.add_field("ooms", GeneratedField(hidden=True))
+        self.add_field("corpus_size", GeneratedField(ignore_reset=True))
+        self.add_field("next_auto_reduce", GeneratedField(ignore_reset=True))
+        self.add_field("crashes", GeneratedField(hidden=True, ignore_reset=True))
+        self.add_field("timeouts", GeneratedField(hidden=True, ignore_reset=True))
+        self.add_field("ooms", GeneratedField(hidden=True, ignore_reset=True))
         self.add_field(
             "crashes/timeouts/ooms",
             JoinField(
