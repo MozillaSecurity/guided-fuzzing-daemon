@@ -28,7 +28,7 @@ from .stats import (
     SumMinMaxField,
     ValueCounterField,
 )
-from .utils import warn_local
+from .utils import create_envs, warn_local
 
 ASAN_SYMBOLIZE = which("asan_symbolize")
 POWER_SCHEDS = ("explore", "coe", "lin", "quad", "exploit", "rare")
@@ -184,29 +184,24 @@ def nyx_main(
 
     start = last_queue_upload = last_stats_report = time()
     last_afl_start = 0.0
-    bin_config = ProgramConfiguration.fromBinary(
+    base_cfg = ProgramConfiguration.fromBinary(
         str(opts.sharedir / "firefox" / "firefox")
     )
     if collector is not None:
-        assert bin_config
+        assert base_cfg
     stats = NyxStats(opts.nyx_instances)
-
-    # environment settings that apply to all instances
-    env = os.environ.copy()
-    env["AFL_NO_UI"] = "1"
-
-    if opts.env:
-        oenv = dict(kv.split("=", 1) for kv in opts.env)
-        if collector is not None:
-            bin_config.addEnvironmentVariables(oenv)
-        for envkey in oenv:
-            env[envkey] = oenv[envkey]
 
     metadata = {}
     if opts.metadata:
         metadata.update(dict(kv.split("=", 1) for kv in opts.metadata))
         if collector is not None:
-            bin_config.addMetadata(metadata)
+            base_cfg.addMetadata(metadata)
+
+    # environment settings that apply to all instances
+    base_env = os.environ.copy()
+    base_env["AFL_NO_UI"] = "1"
+
+    envs, cfgs = create_envs(base_env, opts, opts.nyx_instances, base_cfg)
 
     warn_local(opts)
 
@@ -258,7 +253,7 @@ def nyx_main(
                             cmd.extend(("-F", str(opts.corpus_in)))
 
                     # environment settings that apply to this instance
-                    this_env = env.copy()
+                    this_env = envs[idx].copy()
                     if opts.nyx_async_corpus and not idx:
                         this_env["AFL_IMPORT_FIRST"] = "1"
                     if opts.nyx_log_pattern:
@@ -301,6 +296,7 @@ def nyx_main(
 
             # submit any crashes
             for log in opts.corpus_out.glob("*/crashes/*.log"):
+                idx = int(log.parent.parent.name)
                 crash_path = log.with_suffix("")
                 log_content = log.read_text()
                 print(f"symbolizing {log} (len={len(log_content)})", file=sys.stderr)
@@ -330,7 +326,7 @@ def nyx_main(
                 if collector is not None:
                     try:
                         crash_info = CrashInfo.fromRawCrashData(
-                            [], [], bin_config, auxCrashData=log_content
+                            [], [], cfgs[idx], auxCrashData=log_content
                         )
                     except RuntimeError as exc:
                         # try again with the last line omitted
@@ -351,7 +347,10 @@ def nyx_main(
                                 file=sys.stderr,
                             )
                             crash_info = CrashInfo.fromRawCrashData(
-                                [], [last_line], bin_config, auxCrashData=log_content
+                                [],
+                                [last_line],
+                                cfgs[idx],
+                                auxCrashData=log_content,
                             )
                         else:
                             raise

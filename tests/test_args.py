@@ -221,3 +221,66 @@ def test_args_06(mocker, tmp_path):
         ]
     )
     assert opts.aflbindir == tmp_path.parent
+
+
+def test_args_07():
+    """--env and --env-percent parsing"""
+    opts = parse_args(
+        [
+            "gfd",
+            "--env",
+            "var1=val1",
+            "--env",
+            "var2=val2",
+            "--env-percent",
+            "25",
+            "var3=val3a",
+            "--env-percent",
+            "12.5",
+            "var3=val3b",
+            "--env-percent",
+            "50",
+            "var4=val4",
+        ]
+    )
+    assert opts.env == {
+        "var1": "val1",
+        "var2": "val2",
+    }
+    assert opts.env_percent == {
+        "var3": {
+            "val3a": 25.0,
+            "val3b": 12.5,
+        },
+        "var4": {
+            "val4": 50.0,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "args, error",
+    (
+        (("--env", "var1"), "missing value"),
+        (("--env", "var1=val1", "--env", "var1=val2"), "Multiple values"),
+        (("--env-percent", "10", "var1"), "missing value"),
+        (
+            ("--env-percent", "10", "var1=val1", "--env-percent", "15", "var1=val1"),
+            "Multiple probabilities",
+        ),
+        (("--env-percent", "nan", "var=val"), "Invalid value"),
+        (("--env-percent", "inf", "var=val"), "Invalid value"),
+        (("--env-percent", "-1", "var=val"), "Invalid value"),
+        (("--env-percent", "101", "var=val"), "Invalid value"),
+        (
+            ("--env-percent", "100", "var=val1", "--env-percent", "1", "var=val2"),
+            "Total probabilities",
+        ),
+    ),
+)
+def test_args_08(args, capsys, error):
+    """--env and --env-percent parse errors"""
+    with pytest.raises(SystemExit):
+        parse_args(["gfd", *args])
+    stdio = capsys.readouterr()
+    assert error in stdio.err
