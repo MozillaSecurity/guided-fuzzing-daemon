@@ -44,7 +44,8 @@ def test_libfuzzer_01(mocker, tmp_path):
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     chdir(tmp_path)
-    args.env = ["env1=val1", "env2=val2"]
+    args.env = {"env1": "val1", "env2": "val2"}
+    args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
     args.libfuzzer_instances = 1
@@ -99,7 +100,8 @@ def test_libfuzzer_02(mocker, tmp_path):
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     chdir(tmp_path)
-    args.env = []
+    args.env = None
+    args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
     args.libfuzzer_instances = 1
@@ -136,7 +138,8 @@ def test_libfuzzer_03(mocker, tmp_path):
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     chdir(tmp_path)
-    args.env = []
+    args.env = None
+    args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
     args.libfuzzer_instances = 3
@@ -177,7 +180,8 @@ def test_libfuzzer_04(mocker, tmp_path):
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     chdir(tmp_path)
-    args.env = []
+    args.env = None
+    args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
     args.libfuzzer_instances = 1
@@ -214,7 +218,8 @@ def test_libfuzzer_05(mocker, tmp_path, capsys):
     binary = tmp_path / "firefox"
     corpus = tmp_path / "corpus"
     corpus.mkdir()
-    args.env = []
+    args.env = None
+    args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
     args.libfuzzer_instances = 1

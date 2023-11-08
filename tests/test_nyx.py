@@ -9,6 +9,7 @@ from subprocess import TimeoutExpired
 
 import pytest
 from Collector.Collector import Collector
+from FTB.ProgramConfiguration import ProgramConfiguration
 
 from guided_fuzzing_daemon.nyx import (
     NyxStats,
@@ -92,7 +93,8 @@ def nyx_common(mocker, tmp_path):
             (self.corpus_in / "test1.bin").write_text("A")
             (self.corpus_in / "test2.bin").write_text("B")
             self.args.corpus_out = self.corpus_out
-            self.args.env = []
+            self.args.env = None
+            self.args.env_percent = None
             self.args.max_runtime = 0.0
             self.args.metadata = []
             self.args.nyx_async_corpus = False
@@ -117,7 +119,7 @@ def test_nyx_01(mocker, nyx):
     mocker.patch("os.environ", {"genv1": "gval1"})
     nyx.sleep.side_effect = chain(repeat(None, 124), [NyxMainBreak, None])
     nyx.args.nyx_instances = 2
-    nyx.args.env.extend(("env1=val1", "env2=val2"))
+    nyx.args.env = {"env1": "val1", "env2": "val2"}
     nyx.args.metadata.extend(("meta1=metaval1", "meta2=metaval2"))
     stats = mocker.patch("guided_fuzzing_daemon.nyx.NyxStats", autospec=True)
 
@@ -630,3 +632,57 @@ def test_nyx_10(nyx, tmp_path):
     result = nyx_main(nyx.args, nyx.collector, nyx.s3m)
 
     assert result == 0
+
+
+def test_nyx_11(mocker, nyx):
+    """nyx multiple instances use different env vars and configurations"""
+    # setup
+    cfg1 = mocker.Mock(spec=ProgramConfiguration)
+    cfg2 = mocker.Mock(spec=ProgramConfiguration)
+    mocker.patch(
+        "guided_fuzzing_daemon.nyx.create_envs",
+        return_value=(
+            ({"env1": "val1", "env2": "val2"}, {"env3": "val3", "env4": "val4"}),
+            (cfg1, cfg2),
+        ),
+    )
+    nyx.sleep.side_effect = chain(repeat(None, 64), [NyxMainBreak, None])
+    inp_log = "ld_preload_fuzz_no_pt.so\n/home/user/firefox/firefox\nblah\n"
+    nyx.run.return_value.stdout = inp_log
+    nyx.run.return_value.stderr = "error\n"
+    nyx.run.return_value.returncode = 0
+    nyx.args.nyx_instances = 2
+    orig_popen_cb = nyx.popen.side_effect
+
+    def popen_create_crash(*args, **kwds):
+        result = orig_popen_cb(*args, **kwds)
+        idx = _instance_no(args)
+        (nyx.corpus_out / str(idx) / "crashes" / "crash").touch()
+        (nyx.corpus_out / str(idx) / "crashes" / "crash.log").write_text(inp_log)
+        return result
+
+    nyx.popen.side_effect = popen_create_crash
+    nyx.collector.search.return_value = (None, None)
+    nyx.collector.submit.return_value = {
+        "id": 1234,
+        "shortSignature": "SecurityError: this looks bad",
+    }
+
+    # test
+    nyx.main()
+
+    # check
+    assert nyx.popen.call_count == 2
+    assert nyx.popen.call_args_list[0][1]["env"] == {
+        "env1": "val1",
+        "env2": "val2",
+    }
+    assert nyx.popen.call_args_list[1][1]["env"] == {
+        "env3": "val3",
+        "env4": "val4",
+    }
+    assert nyx.crash_info.fromRawCrashData.call_count == 2
+    assert nyx.crash_info.fromRawCrashData.call_args_list == [
+        mocker.call([], [], cfg1, auxCrashData=inp_log),
+        mocker.call([], [], cfg2, auxCrashData=inp_log),
+    ]

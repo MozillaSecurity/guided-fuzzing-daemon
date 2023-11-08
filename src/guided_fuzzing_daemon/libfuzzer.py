@@ -30,7 +30,7 @@ from .stats import (
     SumField,
     SumMinMaxField,
 )
-from .utils import apply_transform, test_binary_asan, warn_local
+from .utils import apply_transform, create_envs, test_binary_asan, warn_local
 
 RE_LIBFUZZER_STATUS = re.compile(
     r"\s*#(\d+)\s+(INITED|NEW|RELOAD|REDUCE|pulse)\s+cov: (\d+)"
@@ -255,8 +255,8 @@ def libfuzzer_main(
         print(f"error: Specified binary does not exist: {binary}", file=sys.stderr)
         return 2
 
-    configuration = ProgramConfiguration.fromBinary(binary)
-    if configuration is None:
+    base_cfg = ProgramConfiguration.fromBinary(binary)
+    if base_cfg is None:
         print(
             "error: Failed to load program configuration based on binary",
             file=sys.stderr,
@@ -312,27 +312,21 @@ def libfuzzer_main(
         if arg not in cmdline:
             cmdline.append(arg)
 
-    # Copy the system environment variables by default and overwrite them
-    # if they are specified through env.
-    env = dict(os.environ)
-    if opts.env:
-        oenv = dict(kv.split("=", 1) for kv in opts.env)
-        configuration.addEnvironmentVariables(oenv)
-        for envkey in oenv:
-            env[envkey] = oenv[envkey]
-
     args = opts.rargs[1:]
     if args:
-        configuration.addProgramArguments(args)
+        base_cfg.addProgramArguments(args)
 
     metadata = {}
     if opts.metadata:
         metadata.update(dict(kv.split("=", 1) for kv in opts.metadata))
-        configuration.addMetadata(metadata)
+        base_cfg.addMetadata(metadata)
 
+    base_env = os.environ.copy()
     # Set LD_LIBRARY_PATH for convenience
-    if "LD_LIBRARY_PATH" not in env:
-        env["LD_LIBRARY_PATH"] = str(binary.parent)
+    if "LD_LIBRARY_PATH" not in base_env:
+        base_env["LD_LIBRARY_PATH"] = str(binary.parent)
+
+    envs, cfgs = create_envs(base_env, opts, opts.libfuzzer_instances, base_cfg)
 
     signature_repeat_count = 0
     last_signature = None
@@ -434,7 +428,7 @@ def libfuzzer_main(
                         cmdline,
                         # stdout=None,
                         stderr=PIPE,
-                        env=env,
+                        env=envs[idx],
                         text=True,
                     )
 
@@ -687,7 +681,7 @@ def libfuzzer_main(
             assert collector is not None
 
             crash_info = CrashInfo.fromRawCrashData(
-                [], stderr, configuration, auxCrashData=trace
+                [], stderr, cfgs[result], auxCrashData=trace
             )
 
             (sigfile, metadata) = collector.search(crash_info)

@@ -7,7 +7,12 @@ import tempfile
 import time
 import zipfile
 from argparse import Namespace
+from copy import copy
 from pathlib import Path
+from random import uniform
+from typing import Dict, Tuple
+
+from FTB.ProgramConfiguration import ProgramConfiguration
 
 
 def apply_transform(script_path: Path, testcase_path: Path) -> Path:
@@ -43,6 +48,61 @@ def apply_transform(script_path: Path, testcase_path: Path) -> Path:
                 archive.write(str(file), arcname=file.relative_to(output_path))
 
     return Path(archive_path)
+
+
+def create_envs(
+    env: Dict[str, str], opts: Namespace, instances: int, cfg: ProgramConfiguration
+) -> Tuple[Tuple[Dict[str, str], ...], Tuple[ProgramConfiguration, ...]]:
+    """Create a list of environments and configurations for each fuzzing instance.
+
+    Arguments:
+        env: Base environment
+        opts: Program arguments.
+        instances: Number of fuzzing instances
+        cfg: Common base program configuration
+
+    Returns:
+        2-tuple:
+            instances length tuple of environment for each instance
+            instances length tuple of ProgramConfiguration for each instance
+    """
+    # Copy the system environment variables by default and overwrite them
+    # if they are specified through env.
+    base_env = env.copy()
+    base_cfg = copy(cfg)
+    base_cfg.env = base_cfg.env.copy()
+
+    if opts.env:
+        base_env.update(opts.env)
+        base_cfg.addEnvironmentVariables(opts.env)
+
+    if opts.env_percent:
+        envs = []
+        cfgs = []
+
+        for _ in range(instances):
+            add_env = {}
+            for key, value_pcts in opts.env_percent.items():
+                rand_val = uniform(0.0, 100.0)
+                for value, pct in value_pcts.items():
+                    if rand_val <= pct:
+                        add_env[key] = value
+                        break
+                    rand_val -= pct
+
+            this_cfg = copy(base_cfg)
+            this_cfg.env = this_cfg.env.copy()
+            this_cfg.addEnvironmentVariables(add_env)
+
+            this_env = base_env.copy()
+            this_env.update(add_env)
+
+            envs.append(this_env)
+            cfgs.append(this_cfg)
+
+        return (tuple(envs), tuple(cfgs))
+
+    return ((base_env,) * instances, (base_cfg,) * instances)
 
 
 def test_binary_asan(bin_path: Path) -> bool:

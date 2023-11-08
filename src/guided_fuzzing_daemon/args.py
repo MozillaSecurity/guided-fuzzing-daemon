@@ -212,9 +212,17 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
 
     libf_group.add_argument(
         "--env",
-        nargs="+",
+        action="append",
         type=str,
-        help="List of environment variables in the form 'KEY=VALUE'",
+        metavar="KEY=VALUE",
+        help="Set an environment variable in the form 'KEY=VALUE'",
+    )
+    libf_group.add_argument(
+        "--env-percent",
+        action="append",
+        nargs=2,
+        metavar="% KEY=VALUE",
+        help="Set an environment variable sometimes (%%/100) in the form 'KEY=VALUE'",
     )
     libf_group.add_argument(
         "--cmd", action="store_true", help="Command with parameters to run"
@@ -464,6 +472,36 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     if opts.s3_queue_upload or s3_main:
         if not opts.s3_bucket or not opts.project:
             parser.error("Must specify both --s3-bucket and --project for S3 actions")
+
+    if opts.env:
+        result = {}
+        for var in opts.env:
+            try:
+                key, value = var.split("=", 1)
+            except ValueError:
+                parser.error(f"Definition of --env {var} missing value")
+            if key in result:
+                parser.error(f"Multiple values given for --env {key}")
+            result[key] = value
+        opts.env = result
+
+    if opts.env_percent:
+        result = {}
+        for pct, var in opts.env_percent:
+            try:
+                key, value = var.split("=", 1)
+            except ValueError:
+                parser.error(f"Definition of --env-percent {var} missing value")
+            result.setdefault(key, {})  # value => probability
+            if value in result[key]:
+                parser.error(f"Multiple probabilities given for --env-percent {var}")
+            pct = float(pct)
+            if not 0 <= pct <= 100:  # don't invert range to exclude inf & nan
+                parser.error(f"Invalid value for --env-percent {key}")
+            if sum(result[key].values()) + pct > 100:
+                parser.error(f"Total probabilities for --env-percent {key} > 100")
+            result[key][value] = pct
+        opts.env_percent = result
 
     if opts.mode == "nyx":
         if opts.rargs:
