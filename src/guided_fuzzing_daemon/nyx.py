@@ -15,7 +15,7 @@ from typing import List, Optional, TextIO, Union
 
 from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
-from FTB.Signatures.CrashInfo import CrashInfo
+from FTB.Signatures.CrashInfo import CrashInfo, TraceParsingError
 
 from .s3 import S3Manager
 from .stats import (
@@ -324,36 +324,40 @@ def nyx_main(
                 else:
                     log_content = symbolized = sym_result.stdout
                 if collector is not None:
+                    log_lines = log_content.splitlines()
                     try:
                         crash_info = CrashInfo.fromRawCrashData(
-                            [], [], cfgs[idx], auxCrashData=log_content
+                            [],
+                            [],
+                            cfgs[idx],
+                            auxCrashData=log_lines,
                         )
-                    except RuntimeError as exc:
-                        # try again with the last line omitted
+                    except TraceParsingError as exc:
+                        # try again with the error lines omitted
                         print(
-                            f"CrashInfo.fromRawCrashData raised RuntimeError: {exc}",
+                            "CrashInfo.fromRawCrashData raised TraceParsingError:",
+                            exc,
                             file=sys.stderr,
                         )
                         print("original crash data", file=sys.stderr)
                         print("=" * 20, file=sys.stderr)
-                        sys.stderr.write(log_content)
+                        for line_no, line in enumerate(log_lines):
+                            if line_no == exc.line_no:
+                                print(f"=> {line} <=", file=sys.stderr)
+                            else:
+                                print(f"   {line}", file=sys.stderr)
                         print("=" * 20, file=sys.stderr)
-                        log_lines = log_content.splitlines(keepends=True)
-                        if len(log_lines) > 1:
-                            log_content = "".join(log_lines[:-1])
-                            last_line = log_lines[-1].strip()
-                            print(
-                                f"Retrying without last line: {last_line}",
-                                file=sys.stderr,
-                            )
-                            crash_info = CrashInfo.fromRawCrashData(
-                                [],
-                                [last_line],
-                                cfgs[idx],
-                                auxCrashData=log_content,
-                            )
-                        else:
-                            raise
+                        print(
+                            f"Retrying without last {len(log_lines) - exc.line_no} "
+                            "lines",
+                            file=sys.stderr,
+                        )
+                        crash_info = CrashInfo.fromRawCrashData(
+                            [],
+                            log_lines[exc.line_no :],
+                            cfgs[idx],
+                            auxCrashData=log_lines[: exc.line_no],
+                        )
 
                     (sigfile, metadata) = collector.search(crash_info)
 
