@@ -23,6 +23,17 @@ class NyxMainBreak(Exception):
     """Break out of main loop"""
 
 
+def _get_path_args(arg, args):
+    start = 0
+    while start < len(args):
+        try:
+            loc = args.index(arg, start)
+        except ValueError:
+            break
+        yield Path(args[loc + 1])
+        start = loc + 2
+
+
 def _instance_no(popen_args):
     if "-M" in popen_args[0]:
         return int(popen_args[0][popen_args[0].index("-M") + 1])
@@ -99,6 +110,7 @@ def nyx_common(mocker, tmp_path):
             self.args.max_runtime = 0.0
             self.args.metadata = []
             self.args.nyx_async_corpus = False
+            self.args.nyx_add_corpus = []
             self.args.nyx_instances = 1
             self.args.nyx_log_pattern = None
             self.args.rargs = []
@@ -354,8 +366,8 @@ def test_nyx_05(mocker, nyx):
         main.args[0][main.args[0].index("-i") + 1]
         == sec.args[0][sec.args[0].index("-i") + 1]
     )
-    assert Path(main.args[0][main.args[0].index("-F") + 1]) == nyx.corpus_in
-    assert "-F" not in sec.args[0]
+    assert set(_get_path_args("-F", main.args[0])) == {nyx.corpus_in}
+    assert nyx.corpus_in not in set(_get_path_args("-F", sec.args[0]))
 
 
 def test_nyx_06(mocker, nyx, tmp_path):
@@ -627,3 +639,23 @@ def test_nyx_11(mocker, nyx):
         mocker.call([], [], cfg1, auxCrashData=inp_log.splitlines()),
         mocker.call([], [], cfg2, auxCrashData=inp_log.splitlines()),
     ]
+
+
+def test_nyx_12(mocker, nyx, tmp_path):
+    """nyx additional corpus"""
+    # setup
+    mocker.patch("os.environ", {})
+    nyx.sleep.side_effect = chain(repeat(None, 124), [NyxMainBreak, None])
+    corpus_add = tmp_path / "corpus.add"
+    nyx.args.nyx_add_corpus.append(corpus_add)
+    nyx.args.nyx_instances = 2
+
+    # test
+    nyx.main()
+
+    # check
+    popen_calls = nyx.popen.call_args_list
+    assert len(popen_calls) == 2
+    main, sec = popen_calls
+    assert set(_get_path_args("-F", main.args[0])) == {corpus_add}
+    assert set(_get_path_args("-F", sec.args[0])) == {corpus_add}

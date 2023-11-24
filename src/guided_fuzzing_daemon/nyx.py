@@ -251,6 +251,8 @@ def nyx_main(
                         cmd = ["-M", "0"]
                         if opts.nyx_async_corpus:
                             cmd.extend(("-F", str(opts.corpus_in)))
+                    for additional_corpus in opts.nyx_add_corpus:
+                        cmd.extend(("-F", str(additional_corpus)))
 
                     # environment settings that apply to this instance
                     this_env = envs[idx].copy()
