@@ -571,6 +571,13 @@ class S3Manager:
 
 
 def s3_main(opts: Namespace) -> int:
+    if opts.s3_list_projects:
+        connection = S3Connection()
+        bucket = connection.get_bucket(opts.s3_bucket)
+        for key in bucket.list(prefix=opts.project or "", delimiter="/"):
+            print(key.name[:-1])  # trim trailing delimiter
+        return 0
+
     s3m = S3Manager(
         opts.s3_bucket, opts.project, opts.build_project, opts.build_zip_name
     )

@@ -39,6 +39,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         or opts.s3_corpus_refresh
         or opts.s3_corpus_status
         or opts.s3_corpus_upload
+        or opts.s3_list_projects
         or opts.s3_queue_cleanup
         or opts.s3_queue_status
     ):

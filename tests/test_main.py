@@ -13,6 +13,7 @@ S3_ARGS = {
     "s3_corpus_refresh",
     "s3_corpus_status",
     "s3_corpus_upload",
+    "s3_list_projects",
     "s3_queue_cleanup",
     "s3_queue_status",
 }

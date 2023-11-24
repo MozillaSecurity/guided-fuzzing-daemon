@@ -24,6 +24,7 @@ def test_s3_main_01(mocker, arg, method):
     mgr = mocker.patch("guided_fuzzing_daemon.s3.S3Manager")
     args = mocker.Mock()
     args.s3_corpus_refresh = None
+    args.s3_list_projects = False
     for s3_action in S3_ACTIONS:
         setattr(args, s3_action, None)
     setattr(args, arg, True)
@@ -40,6 +41,7 @@ def test_s3_main_02(mocker, tmp_path):
     for s3_action in S3_ACTIONS:
         setattr(args, s3_action, None)
     args.s3_corpus_refresh = tmp_path
+    args.s3_list_projects = False
     args.build = None
     assert s3_main(args) == 0
     assert mgr.return_value.method_calls == [
@@ -80,6 +82,7 @@ def test_s3_main_03(mocker, tmp_path):
     for s3_action in S3_ACTIONS:
         setattr(args, s3_action, None)
     args.s3_corpus_refresh = tmp_path
+    args.s3_list_projects = False
     args.build = None
     assert s3_main(args) == 0
     assert mgr.return_value.method_calls == [
@@ -110,3 +113,21 @@ def test_s3_main_03(mocker, tmp_path):
         mocker.call.download_corpus(tmp_path / "queues"),
         mocker.call.upload_corpus(tmp_path / "tests", corpus_delete=True),
     ]
+
+
+def test_s3_main_04(capsys, mocker):
+    s3c = mocker.patch("guided_fuzzing_daemon.s3.S3Connection")
+    args = mocker.Mock()
+    for s3_action in S3_ACTIONS:
+        setattr(args, s3_action, None)
+    args.s3_list_projects = True
+    args.project = None
+    key = mocker.Mock()
+    key.name = "project/"
+    s3c.return_value.get_bucket.return_value.list.return_value = [key]
+    assert s3_main(args) == 0
+    assert s3c.return_value.get_bucket.call_args_list == [mocker.call(args.s3_bucket)]
+    bucket = s3c.return_value.get_bucket.return_value
+    assert bucket.list.call_args_list == [mocker.call(prefix="", delimiter="/")]
+    stdio = capsys.readouterr()
+    assert stdio.out.splitlines() == ["project"]
