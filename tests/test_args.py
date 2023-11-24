@@ -16,6 +16,11 @@ from guided_fuzzing_daemon.args import parse_args
             ["--libfuzzer-auto-reduce=0"], "Auto reduce threshold", id="lf-auto-reduce"
         ),
         pytest.param(
+            ["--s3-list-projects"],
+            "Must specify --s3-bucket",
+            id="s3-list-projects",
+        ),
+        pytest.param(
             ["--s3-corpus-refresh=nx"],
             "Must specify both --s3-bucket",
             id="s3-corp-refresh",

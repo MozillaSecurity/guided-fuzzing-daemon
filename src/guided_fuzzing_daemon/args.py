@@ -115,6 +115,11 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     )
 
     s3_group.add_argument(
+        "--s3-list-projects",
+        action="store_true",
+        help="List projects in S3 (use --project to filter by prefix)",
+    )
+    s3_group.add_argument(
         "--s3-queue-upload",
         action="store_true",
         help="Use S3 to synchronize queues",
@@ -466,12 +471,15 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         or opts.s3_corpus_refresh
         or opts.s3_corpus_status
         or opts.s3_corpus_upload
+        or opts.s3_list_projects
         or opts.s3_queue_cleanup
         or opts.s3_queue_status
     )
-    if opts.s3_queue_upload or s3_main:
+    if opts.s3_queue_upload or (s3_main and not opts.s3_list_projects):
         if not opts.s3_bucket or not opts.project:
             parser.error("Must specify both --s3-bucket and --project for S3 actions")
+    elif opts.s3_list_projects and not opts.s3_bucket:
+        parser.error("Must specify --s3-bucket for S3 list projects action")
 
     if opts.env:
         result = {}
