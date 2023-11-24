@@ -294,6 +294,12 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         help="Don't print AFL logs on stdout. Requires --afl-log-pattern.",
     )
     nyx_group.add_argument(
+        "--nyx-add-corpus",
+        action="append",
+        type=Path,
+        help="Add additional corpus path.",
+    )
+    nyx_group.add_argument(
         "--max-runtime",
         type=float,
         default=0.0,
