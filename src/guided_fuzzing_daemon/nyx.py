@@ -259,6 +259,8 @@ def nyx_main(
                     this_env = envs[idx].copy()
                     if opts.nyx_async_corpus and not idx:
                         this_env["AFL_IMPORT_FIRST"] = "1"
+                    if not idx:
+                        this_env["AFL_FINAL_SYNC"] = "1"
                     if opts.nyx_log_pattern:
                         if "%" in opts.nyx_log_pattern:
                             this_env["AFL_NYX_LOG"] = opts.nyx_log_pattern % (idx,)

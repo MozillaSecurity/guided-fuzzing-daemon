@@ -356,8 +356,9 @@ def test_nyx_05(mocker, nyx):
     assert len(popen_calls) == 2
     main, sec = popen_calls
     assert main.kwargs["env"] == {
-        "AFL_NO_UI": "1",
+        "AFL_FINAL_SYNC": "1",
         "AFL_IMPORT_FIRST": "1",
+        "AFL_NO_UI": "1",
     }
     assert sec.kwargs["env"] == {
         "AFL_NO_UI": "1",
@@ -627,6 +628,7 @@ def test_nyx_11(mocker, nyx):
     # check
     assert nyx.popen.call_count == 2
     assert nyx.popen.call_args_list[0][1]["env"] == {
+        "AFL_FINAL_SYNC": "1",
         "env1": "val1",
         "env2": "val2",
     }
