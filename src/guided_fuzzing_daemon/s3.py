@@ -165,6 +165,9 @@ class S3Manager:
         queue_path = base_path / "queue"
         queue_files = []
 
+        if not queue_path.is_dir():
+            return
+
         for queue_file in queue_path.iterdir():
             # Ignore all files that aren't crash results
             if not queue_file.name.startswith("id:"):
