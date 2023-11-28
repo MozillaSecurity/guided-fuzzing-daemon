@@ -175,7 +175,9 @@ def test_nyx_02(mocker, nyx):
 
     # check that upload is called once in the loop, once in finally
     assert nyx.s3m.upload_afl_queue_dir.call_count == 2
-    assert nyx.s3m.upload_afl_queue_dir.call_args == mocker.call(nyx.corpus_out / "0")
+    assert nyx.s3m.upload_afl_queue_dir.call_args == mocker.call(
+        nyx.corpus_out / "0", nyx.sharedir / "config.sh"
+    )
 
 
 def test_nyx_03a(nyx):

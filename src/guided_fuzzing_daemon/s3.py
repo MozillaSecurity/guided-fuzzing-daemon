@@ -153,13 +153,19 @@ class S3Manager:
 
             self.downloaded_files.add(basename)
 
-    def upload_afl_queue_dir(self, base_path: Path, new_cov_only: bool = True) -> None:
+    def upload_afl_queue_dir(
+        self,
+        base_path: Path,
+        cmdline_path: Path,
+        new_cov_only: bool = True,
+    ) -> None:
         """Synchronize the queue directory of the specified AFL base directory
         to the specified S3 bucket. This method only uploads files that don't
         exist yet on the receiving side.
 
         Args:
             base_path: AFL base directory
+            cmdline_path: cmdline file (or other file) to be included in queues
             new_cov_only: Only upload files that have new coverage
         """
         queue_path = base_path / "queue"
@@ -185,8 +191,7 @@ class S3Manager:
 
             queue_files.append(queue_file.name)
 
-        cmdline_file = base_path / "cmdline"
-        self.__upload_queue_files(queue_path, queue_files, base_path, cmdline_file)
+        self.__upload_queue_files(queue_path, queue_files, base_path, cmdline_path)
 
     def download_queue_dirs(self, work_path: Path) -> Dict[str, int]:
         """Downloads all queue files into the queues sub directory of the specified
@@ -246,6 +251,11 @@ class S3Manager:
                 remote_key.get_contents_to_filename(str(work_path / "cmdline"))
                 continue
 
+            # If we see a config.sh file, fetch it into the main work directory
+            if PurePosixPath(remote_key.name).name == "config.sh":
+                remote_key.get_contents_to_filename(str(work_path / "config.sh"))
+                continue
+
             tmp_file = download_path / "tmp"
 
             remote_key.get_contents_to_filename(str(tmp_file))
@@ -303,9 +313,11 @@ class S3Manager:
             if remote_key.name.endswith("/"):
                 continue
 
-            # Ignore the cmdline and closed files
-            if remote_key.name.endswith("/cmdline") or remote_key.name.endswith(
-                "/closed"
+            # Ignore the cmdline, config.sh, and closed files
+            if (
+                remote_key.name.endswith("/cmdline")
+                or remote_key.name.endswith("/closed")
+                or remote_key.name.endswith("/config.sh")
             ):
                 continue
 
@@ -558,7 +570,7 @@ class S3Manager:
             if queue_file not in remote_files:
                 upload_list.append(queue_basedir / queue_file)
 
-        if "cmdline" not in remote_files:
+        if cmdline_file.name not in remote_files:
             upload_list.append(cmdline_file)
 
         for upload_file in upload_list:
@@ -616,7 +628,11 @@ def s3_main(opts: Namespace) -> int:
         queue_stats = s3m.download_queue_dirs(opts.s3_corpus_refresh)
         refresh_stats.fields["queue_files"].update(sum(queue_stats.values()))
 
-        cmdline_file = corpus_path / "cmdline"
+        if opts.mode == "nyx":
+            cmdline_file = corpus_path / "config.sh"
+        else:
+            cmdline_file = corpus_path / "cmdline"
+
         if not cmdline_file.exists():
             # this can happen in a few legitimate cases:
             #  - project folder does not exist at all (new project)
@@ -624,7 +640,8 @@ def s3_main(opts: Namespace) -> int:
             #  - no queues exist (recently refreshed manually)
             # print the error, but return 0
             print(
-                "error: Failed to download a cmdline file from queue directories.",
+                f"error: Failed to download a {cmdline_file.name} file from queue "
+                "directories.",
                 file=sys.stderr,
             )
             return 0
@@ -637,7 +654,7 @@ def s3_main(opts: Namespace) -> int:
             s3m.download_build(build_path)
 
         if opts.mode != "nyx":
-            cmdline = (corpus_path / "cmdline").read_text().splitlines()
+            cmdline = cmdline_file.read_text().splitlines()
 
             # Assume cmdline[0] is the name of the binary
             binary_name = Path(cmdline[0]).name
@@ -685,6 +702,7 @@ def s3_main(opts: Namespace) -> int:
             if opts.mode == "nyx":
                 assert opts.aflbindir.is_dir()
                 assert opts.sharedir.is_dir()
+                shutil.copy(cmdline_file, opts.sharedir)
 
                 # Run afl-cmin
                 afl_cmin = Path(opts.aflbindir) / "afl-cmin"
