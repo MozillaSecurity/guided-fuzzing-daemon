@@ -158,6 +158,7 @@ class S3Manager:
         base_path: Path,
         cmdline_path: Path,
         new_cov_only: bool = True,
+        include_sync: bool = False,
     ) -> None:
         """Synchronize the queue directory of the specified AFL base directory
         to the specified S3 bucket. This method only uploads files that don't
@@ -167,6 +168,7 @@ class S3Manager:
             base_path: AFL base directory
             cmdline_path: cmdline file (or other file) to be included in queues
             new_cov_only: Only upload files that have new coverage
+            include_sync: Upload files obtained from other local queues
         """
         queue_path = base_path / "queue"
         queue_files = []
@@ -186,7 +188,7 @@ class S3Manager:
 
             # Ignore files that have been obtained from other local queues
             # to avoid duplicate uploading
-            if ",sync:" in queue_file.name:
+            if not include_sync and ",sync:" in queue_file.name:
                 continue
 
             queue_files.append(queue_file.name)
