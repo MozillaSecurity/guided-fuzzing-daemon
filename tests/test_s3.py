@@ -84,12 +84,14 @@ def test_s3_main_03(mocker, tmp_path):
     args.s3_corpus_refresh = tmp_path
     args.s3_list_projects = False
     args.build = None
+    args.sharedir = tmp_path / "sharedir"
+    (tmp_path / "sharedir").mkdir()
     assert s3_main(args) == 0
     assert mgr.return_value.method_calls == [
         mocker.call.clean_queue_dirs(),
         mocker.call.download_queue_dirs(tmp_path),
     ]
-    (tmp_path / "cmdline").write_text("build/firefox")
+    (tmp_path / "config.sh").write_text("build/firefox")
     (tmp_path / "build").mkdir()
 
     def fake_run(*_args, **_kwds):

@@ -401,7 +401,10 @@ def nyx_main(
                 and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD
             ):
                 assert s3m is not None
-                s3m.upload_afl_queue_dir(opts.corpus_out / "0")
+                s3m.upload_afl_queue_dir(
+                    opts.corpus_out / "0",
+                    opts.sharedir / "config.sh",
+                )
                 last_queue_upload = time()
 
             # Calculate stats
@@ -442,7 +445,7 @@ def nyx_main(
         log_tee.close()
 
         if s3m and opts.s3_queue_upload:
-            s3m.upload_afl_queue_dir(opts.corpus_out / "0")
+            s3m.upload_afl_queue_dir(opts.corpus_out / "0", opts.sharedir / "config.sh")
 
         # final stats
         if opts.stats:
