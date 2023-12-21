@@ -646,7 +646,9 @@ def s3_main(opts: Namespace) -> int:
                 "directories.",
                 file=sys.stderr,
             )
-            return 0
+            # allow nyx to pass if config.sh already exists in sharedir
+            if not (opts.mode == "nyx" and (opts.sharedir / cmdline_file).is_file()):
+                return 0
 
         if opts.build:
             build_path = Path(opts.build)
@@ -704,7 +706,8 @@ def s3_main(opts: Namespace) -> int:
             if opts.mode == "nyx":
                 assert opts.aflbindir.is_dir()
                 assert opts.sharedir.is_dir()
-                shutil.copy(cmdline_file, opts.sharedir)
+                if not (opts.sharedir / cmdline_file).is_file():
+                    shutil.copy(cmdline_file, opts.sharedir)
 
                 # Run afl-cmin
                 afl_cmin = Path(opts.aflbindir) / "afl-cmin"
