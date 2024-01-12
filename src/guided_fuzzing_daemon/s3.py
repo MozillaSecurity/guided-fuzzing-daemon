@@ -616,93 +616,99 @@ def s3_main(opts: Namespace) -> int:
         refresh_stats.add_field("corpus_post", GeneratedField())
         refresh_stats.add_sys_stats()
 
-        corpus_path.mkdir(parents=True, exist_ok=True)
-
-        queues_dir = corpus_path / "queues"
-
-        print(f"Cleaning old queues from s3://{opts.s3_bucket}/{opts.project}/queues/")
-        s3m.clean_queue_dirs()
-
-        print(
-            f"Downloading queues from s3://{opts.s3_bucket}/{opts.project}/queues/ to "
-            f"{queues_dir}"
-        )
-        queue_stats = s3m.download_queue_dirs(opts.s3_corpus_refresh)
-        refresh_stats.fields["queue_files"].update(sum(queue_stats.values()))
-
-        if opts.mode == "nyx":
-            cmdline_file = corpus_path / "config.sh"
-        else:
-            cmdline_file = corpus_path / "cmdline"
-
-        if not cmdline_file.exists():
-            # this can happen in a few legitimate cases:
-            #  - project folder does not exist at all (new project)
-            #  - only closed queues existed (old project)
-            #  - no queues exist (recently refreshed manually)
-            # print the error, but return 0
-            print(
-                f"error: Failed to download a {cmdline_file.name} file from queue "
-                "directories.",
-                file=sys.stderr,
-            )
-            # allow nyx to pass if config.sh already exists in sharedir
-            if not (opts.mode == "nyx" and (opts.sharedir / cmdline_file).is_file()):
-                return 0
-
-        if opts.build:
-            build_path = Path(opts.build)
-        else:
-            print("Downloading build")
-            build_path = corpus_path / "build"
-            s3m.download_build(build_path)
-
-        if opts.mode != "nyx":
-            cmdline = cmdline_file.read_text().splitlines()
-
-            # Assume cmdline[0] is the name of the binary
-            binary_name = Path(cmdline[0]).name
-
-            # Try locating our binary in the build we just unpacked
-            binary_search_result = [
-                file
-                for file in build_path.glob("**/*")
-                if file.is_file()
-                and file.name == binary_name
-                and (stat.S_IXUSR & file.stat().st_mode)
-            ]
-
-            if not binary_search_result:
-                print(
-                    f"error: Failed to locate binary {binary_name} in unpacked build.",
-                    file=sys.stderr,
-                )
-                return 2
-
-            if len(binary_search_result) > 1:
-                print(
-                    f"error: Binary name {binary_name} is ambiguous in unpacked build.",
-                    file=sys.stderr,
-                )
-                return 2
-
-            cmdline[0] = str(binary_search_result[0])
-
-        # Download our current corpus into the queues directory as well
-        print(
-            f"Downloading corpus from s3://{opts.s3_bucket}/{opts.project}/corpus/ to "
-            f"{queues_dir}"
-        )
-        corpus_size = s3m.download_corpus(queues_dir)
-        refresh_stats.fields["corpus_pre"].update(corpus_size)
-
-        # Ensure the directory for our new tests is empty
-        updated_tests_dir = corpus_path / "tests"
-        if updated_tests_dir.exists():
-            shutil.rmtree(str(updated_tests_dir))
-        updated_tests_dir.mkdir()
-
         try:
+            corpus_path.mkdir(parents=True, exist_ok=True)
+
+            queues_dir = corpus_path / "queues"
+
+            print(
+                f"Cleaning old queues from s3://{opts.s3_bucket}/{opts.project}/queues/"
+            )
+            s3m.clean_queue_dirs()
+
+            print(
+                f"Downloading queues from s3://{opts.s3_bucket}/{opts.project}/queues/ "
+                f"to {queues_dir}"
+            )
+            queue_stats = s3m.download_queue_dirs(opts.s3_corpus_refresh)
+            refresh_stats.fields["queue_files"].update(sum(queue_stats.values()))
+
+            if opts.mode == "nyx":
+                cmdline_file = corpus_path / "config.sh"
+            else:
+                cmdline_file = corpus_path / "cmdline"
+
+            if not cmdline_file.exists():
+                # this can happen in a few legitimate cases:
+                #  - project folder does not exist at all (new project)
+                #  - only closed queues existed (old project)
+                #  - no queues exist (recently refreshed manually)
+                # print the error, but return 0
+                print(
+                    f"error: Failed to download a {cmdline_file.name} file from queue "
+                    "directories.",
+                    file=sys.stderr,
+                )
+                # allow nyx to pass if config.sh already exists in sharedir
+                if not (
+                    opts.mode == "nyx" and (opts.sharedir / cmdline_file).is_file()
+                ):
+                    return 0
+
+            if opts.build:
+                build_path = Path(opts.build)
+            else:
+                print("Downloading build")
+                build_path = corpus_path / "build"
+                s3m.download_build(build_path)
+
+            if opts.mode != "nyx":
+                cmdline = cmdline_file.read_text().splitlines()
+
+                # Assume cmdline[0] is the name of the binary
+                binary_name = Path(cmdline[0]).name
+
+                # Try locating our binary in the build we just unpacked
+                binary_search_result = [
+                    file
+                    for file in build_path.glob("**/*")
+                    if file.is_file()
+                    and file.name == binary_name
+                    and (stat.S_IXUSR & file.stat().st_mode)
+                ]
+
+                if not binary_search_result:
+                    print(
+                        f"error: Failed to locate binary {binary_name} in unpacked "
+                        "build.",
+                        file=sys.stderr,
+                    )
+                    return 2
+
+                if len(binary_search_result) > 1:
+                    print(
+                        f"error: Binary name {binary_name} is ambiguous in unpacked "
+                        "build.",
+                        file=sys.stderr,
+                    )
+                    return 2
+
+                cmdline[0] = str(binary_search_result[0])
+
+            # Download our current corpus into the queues directory as well
+            print(
+                f"Downloading corpus from s3://{opts.s3_bucket}/{opts.project}/corpus/ "
+                f"to {queues_dir}"
+            )
+            corpus_size = s3m.download_corpus(queues_dir)
+            refresh_stats.fields["corpus_pre"].update(corpus_size)
+
+            # Ensure the directory for our new tests is empty
+            updated_tests_dir = corpus_path / "tests"
+            if updated_tests_dir.exists():
+                shutil.rmtree(str(updated_tests_dir))
+            updated_tests_dir.mkdir()
+
             if opts.mode == "nyx":
                 assert opts.aflbindir.is_dir()
                 assert opts.sharedir.is_dir()
