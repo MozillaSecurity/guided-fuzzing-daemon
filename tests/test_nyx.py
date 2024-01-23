@@ -662,4 +662,4 @@ def test_nyx_12(mocker, nyx, tmp_path):
     assert len(popen_calls) == 2
     main, sec = popen_calls
     assert set(_get_path_args("-F", main.args[0])) == {corpus_add}
-    assert set(_get_path_args("-F", sec.args[0])) == {corpus_add}
+    assert set(_get_path_args("-F", sec.args[0])) == set()
