@@ -249,12 +249,13 @@ class S3Manager:
                 continue
 
             # If we see a cmdline file, fetch it into the main work directory
-            if PurePosixPath(remote_key.name).name == "cmdline":
+            remote_path = PurePosixPath(remote_key.name)
+            if remote_path.name == "cmdline":
                 remote_key.get_contents_to_filename(str(work_path / "cmdline"))
                 continue
 
             # If we see a config.sh file, fetch it into the main work directory
-            if PurePosixPath(remote_key.name).name == "config.sh":
+            if remote_path.name == "config.sh":
                 remote_key.get_contents_to_filename(str(work_path / "config.sh"))
                 continue
 
@@ -264,7 +265,7 @@ class S3Manager:
 
             hash_name = hashlib.sha1(tmp_file.read_bytes()).hexdigest()
 
-            tmp_file.rename(download_path / hash_name)
+            tmp_file.rename(download_path / f"{hash_name}{remote_path.suffix}")
 
             queue_counts.setdefault(queue_name, 0)
             queue_counts[queue_name] += 1
