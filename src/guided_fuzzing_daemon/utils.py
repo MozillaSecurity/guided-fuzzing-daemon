@@ -8,9 +8,10 @@ import time
 import zipfile
 from argparse import Namespace
 from copy import copy
+from math import log10
 from pathlib import Path
 from random import uniform
-from typing import Dict, Tuple
+from typing import Dict, List, TextIO, Tuple
 
 from FTB.ProgramConfiguration import ProgramConfiguration
 
@@ -132,3 +133,55 @@ def warn_local(opts: Namespace) -> None:
             file=sys.stderr,
         )
         time.sleep(2)
+
+
+class LogFile:
+    def __init__(self, handle: TextIO, prefix: str) -> None:
+        self.handle = handle
+        self.tee_buf = ""
+        self.printed_pos = 0
+        self.prefix = prefix
+
+    def print(self, flush: bool = False) -> None:
+        with Path(self.handle.name).open(encoding="utf-8") as read_file:
+            read_file.seek(self.printed_pos)
+            new_data = read_file.read()
+            self.printed_pos = read_file.tell()
+        lines_and_tail = new_data.rsplit("\n", 1)
+        if len(lines_and_tail) == 1:
+            self.tee_buf = f"{self.tee_buf}{lines_and_tail[0]}"
+        else:
+            lines, tail = lines_and_tail
+            lines = f"{self.tee_buf}{lines}"
+            self.tee_buf = tail
+            for line in lines.splitlines():
+                print(f"[{self.prefix}] {line}")
+        if flush and self.tee_buf:
+            print(f"[{self.prefix}] {self.tee_buf}")
+            self.tee_buf = ""
+
+
+class LogTee:
+    def __init__(self, hide: bool, instances: int) -> None:
+        self.open_files: List[LogFile] = []
+        if instances > 1:
+            self.instance_width = int(log10(instances - 1)) + 1
+        else:
+            self.instance_width = 1
+        self.hide = hide
+
+    def append(self, handle: TextIO) -> None:
+        idx = len(self.open_files)
+        prefix = f"{idx:{self.instance_width}}"
+        self.open_files.append(LogFile(handle, prefix))
+
+    def print(self) -> None:
+        if not self.hide:
+            for open_file in self.open_files:
+                open_file.print()
+
+    def close(self) -> None:
+        for open_file in self.open_files:
+            if not self.hide:
+                open_file.print(flush=True)
+            open_file.handle.close()

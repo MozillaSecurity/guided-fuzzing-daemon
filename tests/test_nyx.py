@@ -12,10 +12,7 @@ from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import TraceParsingError
 
-from guided_fuzzing_daemon.nyx import (
-    NyxStats,
-    nyx_main,
-)
+from guided_fuzzing_daemon.nyx import nyx_main
 from guided_fuzzing_daemon.s3 import S3Manager
 
 
@@ -109,10 +106,10 @@ def nyx_common(mocker, tmp_path):
             self.args.env_percent = None
             self.args.max_runtime = 0.0
             self.args.metadata = []
-            self.args.nyx_async_corpus = False
-            self.args.nyx_add_corpus = []
-            self.args.nyx_instances = 1
-            self.args.nyx_log_pattern = None
+            self.args.afl_async_corpus = False
+            self.args.afl_add_corpus = []
+            self.args.instances = 1
+            self.args.afl_log_pattern = None
             self.args.rargs = []
             self.args.s3_queue_upload = False
             self.args.sharedir = self.sharedir
@@ -131,10 +128,10 @@ def test_nyx_01(mocker, nyx):
     # setup
     mocker.patch("os.environ", {"genv1": "gval1"})
     nyx.sleep.side_effect = chain(repeat(None, 124), [NyxMainBreak, None])
-    nyx.args.nyx_instances = 2
+    nyx.args.instances = 2
     nyx.args.env = {"env1": "val1", "env2": "val2"}
     nyx.args.metadata.extend(("meta1=metaval1", "meta2=metaval2"))
-    stats = mocker.patch("guided_fuzzing_daemon.nyx.NyxStats", autospec=True)
+    stats = mocker.patch("guided_fuzzing_daemon.nyx.AFLStats", autospec=True)
 
     # test
     nyx.main()
@@ -336,8 +333,8 @@ def test_nyx_05(mocker, nyx):
     # setup
     mocker.patch("os.environ", {})
     nyx.sleep.side_effect = chain(repeat(None, 124), [NyxMainBreak, None])
-    nyx.args.nyx_async_corpus = True
-    nyx.args.nyx_instances = 2
+    nyx.args.afl_async_corpus = True
+    nyx.args.instances = 2
     orig_popen_cb = nyx.popen.side_effect
 
     def popen_check_corpus(*args, **kwds):
@@ -376,7 +373,7 @@ def test_nyx_05(mocker, nyx):
 def test_nyx_06(mocker, nyx, tmp_path):
     """nyx stats are written"""
     # setup
-    stats = mocker.patch("guided_fuzzing_daemon.nyx.NyxStats", autospec=True)
+    stats = mocker.patch("guided_fuzzing_daemon.nyx.AFLStats", autospec=True)
     nyx.sleep.side_effect = chain(repeat(None, 100), [NyxMainBreak, None])
     nyx.args.stats = tmp_path / "stats"
 
@@ -427,9 +424,8 @@ def test_nyx_08(capsys, hide, instances, nyx, pattern, tmp_path):
     # setup
     nyx.sleep.side_effect = chain(repeat(None, 124), [NyxMainBreak, None])
     nyx.args.afl_hide_logs = hide
-    nyx.args.afl_log_pattern = str(tmp_path / f"afl{pattern}")
-    nyx.args.nyx_instances = instances
-    nyx.args.nyx_log_pattern = str(tmp_path / f"nyx{pattern}")
+    nyx.args.afl_log_pattern = str(tmp_path / f"nyx{pattern}")
+    nyx.args.instances = instances
 
     out = []
     out_line = [None] * instances
@@ -473,111 +469,13 @@ def test_nyx_08(capsys, hide, instances, nyx, pattern, tmp_path):
     # nyx log should have been given as env var
     for chld in nyx.popen.call_args_list:
         idx = _instance_no(chld.args)
-        filename = nyx.args.nyx_log_pattern
+        filename = nyx.args.afl_log_pattern
         if pattern:
             filename = filename % (idx,)
         assert chld.kwargs["env"]["AFL_NYX_LOG"] == filename
 
 
-def test_nyx_09a(mocker, tmp_path):
-    """nyx stats calculation (positive)"""
-    (tmp_path / "0").mkdir()
-    (tmp_path / "0" / "fuzzer_stats").touch()
-    mocker.patch.object(NyxStats, "add_sys_stats")
-    stats = NyxStats(2)
-    stats.update_and_write(tmp_path / "stats", [tmp_path / "0"])
-    assert not (tmp_path / "stats").exists()
-    (tmp_path / "0" / "fuzzer_stats").write_text(
-        "execs_done        : 77617\n"
-        "execs_per_sec     : 22.64\n"
-        "pending_favs      : 12\n"
-        "pending_total     : 21\n"
-        "corpus_variable   : 13\n"
-        "saved_crashes     : 7\n"
-        "saved_hangs       : 4\n"
-        "exec_timeout      : 20000\n"
-        "cycles_done       : 3\n"
-        "bitmap_cvg        : 0.13%\n"
-        "last_find         : 1696207996\n"
-    )
-    (tmp_path / "1").mkdir()
-    (tmp_path / "1" / "fuzzer_stats").write_text(
-        "execs_done        : 77617\n"
-        "execs_per_sec     : 22.64\n"
-        "pending_favs      : 24\n"
-        "pending_total     : 21\n"
-        "corpus_variable   : 13\n"
-        "saved_crashes     : 1\n"
-        "saved_hangs       : 9\n"
-        "exec_timeout      : 30000\n"
-        "cycles_done       : 1\n"
-        "bitmap_cvg        : 0.04%\n"
-        "last_find         : 1726207996\n"
-        "random_crap       : who cares\n"
-    )
-    stats.update_and_write(tmp_path / "stats", [tmp_path / "0", tmp_path / "1"])
-    stat_lines = dict(
-        map(str.strip, line.split(":", 1))
-        for line in (tmp_path / "stats").read_text().splitlines()
-    )
-    assert stat_lines == {
-        "execs_done": "155234 total (77617-77617 min/max)",
-        "execs_per_sec": "45.28 total (22.64-22.64 min/max)",
-        "pending_favs": "36",
-        "pending_total": "42",
-        "corpus_variable": "26",
-        "saved_crashes": "8",
-        "saved_hangs": "13",
-        "exec_timeout": "25000",
-        "cycles_done": "1 (1×), 3 (1×)",  # noqa: RUF001
-        "bitmap_cvg": "0.09% avg (0.04%-0.13% min/max)",
-        "last_find": "2024-09-13T06:13:16Z",
-        "instances": "0/2",
-    }
-
-
-def test_nyx_09b(mocker, tmp_path):
-    """nyx stats calculation (negative)"""
-    (tmp_path / "0").mkdir()
-    (tmp_path / "0" / "fuzzer_stats").touch()
-    mocker.patch.object(NyxStats, "add_sys_stats")
-    stats = NyxStats(1)
-    stats.update_and_write(tmp_path / "stats", [tmp_path / "0"])
-    assert not (tmp_path / "stats").exists()
-    (tmp_path / "0" / "fuzzer_stats").write_text(
-        "execs_done        : 7.76.17\n"
-        "execs_per_sec     : 22.64\n"
-        "pending_favs      : 12\n"
-        "pending_total     : 21\n"
-        "corpus_variable   : 13\n"
-        "saved_crashes     : 7\n"
-        "saved_hangs       : 4\n"
-        "cycles_done       : 3\n"
-        "bitmap_cvg        : 0.13%\n"
-        "last_find         : 1696207996\n"
-    )
-    stats.update_and_write(tmp_path / "stats", [tmp_path / "0"])
-    stat_lines = dict(
-        map(str.strip, line.split(":", 1))
-        for line in (tmp_path / "stats").read_text().splitlines()
-    )
-    assert stat_lines == {
-        "execs_done": "0 total (nan-nan min/max)",
-        "execs_per_sec": "22.64 total (22.64-22.64 min/max)",
-        "pending_favs": "12",
-        "pending_total": "21",
-        "corpus_variable": "13",
-        "saved_crashes": "7",
-        "saved_hangs": "4",
-        "exec_timeout": "nan",
-        "cycles_done": "3 (1×)",  # noqa: RUF001
-        "bitmap_cvg": "0.13% avg (0.13%-0.13% min/max)",
-        "last_find": "2023-10-02T00:53:16Z",
-        "instances": "0/1",
-    }
-
-
-def test_nyx_10(nyx, tmp_path):
+def test_nyx_09(nyx, tmp_path):
     """nyx max runtime"""
     # setup
     nyx.args.max_runtime = 30.0
@@ -590,7 +488,7 @@ def test_nyx_10(nyx, tmp_path):
     assert result == 0
 
 
-def test_nyx_11(mocker, nyx):
+def test_nyx_10(mocker, nyx):
     """nyx multiple instances use different env vars and configurations"""
     # setup
     cfg1 = mocker.Mock(spec=ProgramConfiguration)
@@ -607,7 +505,7 @@ def test_nyx_11(mocker, nyx):
     nyx.run.return_value.stdout = inp_log
     nyx.run.return_value.stderr = "error\n"
     nyx.run.return_value.returncode = 0
-    nyx.args.nyx_instances = 2
+    nyx.args.instances = 2
     orig_popen_cb = nyx.popen.side_effect
 
     def popen_create_crash(*args, **kwds):
@@ -645,14 +543,14 @@ def test_nyx_11(mocker, nyx):
     ]
 
 
-def test_nyx_12(mocker, nyx, tmp_path):
+def test_nyx_11(mocker, nyx, tmp_path):
     """nyx additional corpus"""
     # setup
     mocker.patch("os.environ", {})
     nyx.sleep.side_effect = chain(repeat(None, 124), [NyxMainBreak, None])
     corpus_add = tmp_path / "corpus.add"
-    nyx.args.nyx_add_corpus.append(corpus_add)
-    nyx.args.nyx_instances = 2
+    nyx.args.afl_add_corpus.append(corpus_add)
+    nyx.args.instances = 2
 
     # test
     nyx.main()

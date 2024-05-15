@@ -39,7 +39,7 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     # setup argparser
     parser = ArgumentParser(
         usage=(
-            f"{program_name} --libfuzzer or --nyx [OPTIONS] "
+            f"{program_name} --afl or --libfuzzer or --nyx [OPTIONS] "
             "--cmd <COMMAND AND ARGUMENTS>"
         )
     )
@@ -81,6 +81,13 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
 
     mode_group = main_group.add_mutually_exclusive_group()
     mode_group.add_argument(
+        "--afl",
+        action="store_const",
+        const="afl",
+        dest="mode",
+        help="Enable AFL mode",
+    )
+    mode_group.add_argument(
         "--libfuzzer",
         action="store_const",
         const="libfuzzer",
@@ -112,6 +119,13 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         type=Path,
         help="Apply post crash transformation to the testcase",
         metavar="FILE",
+    )
+    main_group.add_argument(
+        "--instances",
+        type=int,
+        default=1,
+        help="Number of parallel instances to run",
+        metavar="COUNT",
     )
 
     s3_group.add_argument(
@@ -239,13 +253,6 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         metavar="COUNT",
     )
     libf_group.add_argument(
-        "--libfuzzer-instances",
-        type=int,
-        default=1,
-        help="Number of parallel libfuzzer instances to run",
-        metavar="COUNT",
-    )
-    libf_group.add_argument(
         "--libfuzzer-auto-reduce",
         type=int,
         help="Auto-reduce the corpus once it has grown by this percentage",
@@ -264,46 +271,6 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         help="Path to Nyx 'sharedir'",
         type=Path,
         metavar="DIR",
-    )
-    nyx_group.add_argument(
-        "--nyx-instances",
-        type=int,
-        default=1,
-        help="Number of parallel Nyx instances to run",
-        metavar="COUNT",
-    )
-    nyx_group.add_argument(
-        "--afl-log-pattern",
-        help="Redirect AFL logs to a separate path. Must contain %%d placeholder if "
-        "--nyx-instances > 1.",
-    )
-    nyx_group.add_argument(
-        "--nyx-log-pattern",
-        help="Write Nyx hprint logs to a separate path (and hide on console). Must "
-        "contain %%d placeholder if --nyx-instances > 1.",
-    )
-    nyx_group.add_argument(
-        "--nyx-async-corpus",
-        action="store_true",
-        help="Init AFL with a single random file from the corpus, and load the rest "
-        "after init in the main process only.",
-    )
-    nyx_group.add_argument(
-        "--afl-hide-logs",
-        action="store_true",
-        help="Don't print AFL logs on stdout. Requires --afl-log-pattern.",
-    )
-    nyx_group.add_argument(
-        "--nyx-add-corpus",
-        action="append",
-        type=Path,
-        help="Add additional corpus path.",
-    )
-    nyx_group.add_argument(
-        "--max-runtime",
-        type=float,
-        default=0.0,
-        help="Specify maximum runtime in seconds for the whole session.",
     )
 
     fm_group.add_argument(
@@ -374,6 +341,17 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     fm_group.add_argument("--sigdir", help="Signature cache directory", metavar="DIR")
 
     afl_group.add_argument(
+        "--afl-log-pattern",
+        help="Redirect AFL logs to a separate path. Must contain %%d placeholder if "
+        "--instances > 1. (applies to Nyx)",
+    )
+    afl_group.add_argument(
+        "--afl-hide-logs",
+        action="store_true",
+        help="Don't print AFL logs on stdout. Requires --afl-log-pattern. "
+        "(applies to Nyx)",
+    )
+    afl_group.add_argument(
         "--test-file",
         type=Path,
         help="Optional path to copy the test file to before reproducing",
@@ -383,41 +361,8 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         "--afl-timeout",
         type=int,
         default=1000,
-        help="Timeout per test to pass to AFL for corpus refreshing",
+        help="Timeout per test to pass to AFL for corpus refreshing. (applies to Nyx)",
         metavar="MSECS",
-    )
-    afl_group.add_argument(
-        "--firefox",
-        action="store_true",
-        help="Test Program is Firefox (requires FFPuppet installed)",
-    )
-    afl_group.add_argument(
-        "--firefox-prefs",
-        type=Path,
-        help="Path to prefs.js file for Firefox",
-        metavar="FILE",
-    )
-    afl_group.add_argument(
-        "--firefox-extensions",
-        nargs="+",
-        type=str,
-        help="Path extension file for Firefox",
-        metavar="FILE",
-    )
-    afl_group.add_argument(
-        "--firefox-testpath",
-        type=Path,
-        help="Path to file to open with Firefox",
-        metavar="FILE",
-    )
-    afl_group.add_argument(
-        "--firefox-start-afl",
-        type=Path,
-        metavar="FILE",
-        help=(
-            "Start AFL with the given Firefox binary, remaining arguments being "
-            "passed to AFL"
-        ),
     )
     afl_group.add_argument(
         "--env-file",
@@ -436,21 +381,40 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         "--afl-binary-dir",
         type=Path,
         dest="aflbindir",
-        help="Path to the AFL binary directory to use",
+        help="Path to the AFL binary directory to use. (applies to Nyx)",
         metavar="DIR",
+    )
+    afl_group.add_argument(
+        "--afl-async-corpus",
+        action="store_true",
+        help="Init AFL with a single random file from the corpus, and load the rest "
+        "after init in the main process only. (applies to Nyx)",
+    )
+    afl_group.add_argument(
+        "--afl-add-corpus",
+        action="append",
+        type=Path,
+        help="Add additional corpus path. (applies to Nyx)",
+    )
+    afl_group.add_argument(
+        "--max-runtime",
+        type=float,
+        default=0.0,
+        help="Specify maximum runtime in seconds for the whole session. "
+        "(applies to Nyx)",
     )
     afl_group.add_argument(
         "--corpus-in",
         "-i",
         type=Path,
-        help="AFL input directory with test cases",
+        help="AFL input directory with test cases. (applies to Nyx)",
         metavar="DIR",
     )
     afl_group.add_argument(
         "--corpus-out",
         "-o",
         type=Path,
-        help="AFL output directory for findings",
+        help="AFL output directory for findings. (applies to Nyx)",
         metavar="DIR",
     )
     afl_group.add_argument("rargs", nargs=REMAINDER)
@@ -522,21 +486,23 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
             parser.error("Nyx mode takes no positional args")
         if not opts.sharedir or not opts.sharedir.is_dir():
             parser.error("Must specify --sharedir with --nyx")
+
+    if opts.mode == "afl":
+        if not opts.rargs or not Path(opts.rargs[0]).is_file():
+            parser.error("AFL mode expects at least one arg (target binary)")
+
+    if opts.mode in {"afl", "nyx"}:
         if not opts.aflbindir:
-            parser.error("Must specify --afl-binary-dir for Nyx mode")
+            parser.error("Must specify --afl-binary-dir for AFL/Nyx mode")
         if not opts.s3_corpus_refresh:
             if not opts.corpus_in or not opts.corpus_in.is_dir():
-                parser.error("Must specify --corpus-in with --nyx")
+                parser.error("Must specify --corpus-in with --afl/--nyx")
             if not opts.corpus_out:
                 # don't check existence, main() will auto-create
-                parser.error("Must specify --corpus-out with --nyx")
-        if opts.nyx_log_pattern is not None:
-            _check_log_pattern(
-                opts.nyx_instances, opts.nyx_log_pattern, "--nyx-log-pattern", parser
-            )
+                parser.error("Must specify --corpus-out with --afl/--nyx")
         if opts.afl_log_pattern is not None:
             _check_log_pattern(
-                opts.nyx_instances, opts.afl_log_pattern, "--afl-log-pattern", parser
+                opts.instances, opts.afl_log_pattern, "--afl-log-pattern", parser
             )
         if opts.afl_hide_logs and opts.afl_log_pattern is None:
             parser.error("--afl-hide-logs requires --afl-log-pattern")

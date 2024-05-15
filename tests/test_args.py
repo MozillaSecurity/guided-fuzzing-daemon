@@ -2,6 +2,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from itertools import chain
+
 import pytest
 
 from guided_fuzzing_daemon.args import parse_args
@@ -59,28 +61,23 @@ def test_args_03():
     )
 
 
+@pytest.mark.parametrize("mode", (["--afl", "tmp/file"], ["--nyx", "--sharedir", ""]))
 @pytest.mark.parametrize(
     "args, msg",
     (
-        pytest.param([], "specify --sharedir", id="wo-sharedir"),
-        pytest.param([""], "takes no positional", id="extra-args"),
+        pytest.param([], "Must specify --afl-binary-dir ", id="wo-bindir"),
         pytest.param(
-            ["--sharedir", ""], "Must specify --afl-binary-dir for Nyx", id="wo-bindir"
-        ),
-        pytest.param(
-            ["--sharedir", "", "--afl-binary-dir", ""],
+            ["--afl-binary-dir", ""],
             "specify --corpus-in",
             id="wo-corpus-in",
         ),
         pytest.param(
-            ["--sharedir", "", "--afl-binary-dir", "", "-i", "tmp"],
+            ["--afl-binary-dir", "", "-i", "tmp"],
             "specify --corpus-out",
             id="wo-corpus-out",
         ),
         pytest.param(
             [
-                "--sharedir",
-                "",
                 "--afl-binary-dir",
                 "",
                 "--afl-log-pattern",
@@ -95,11 +92,9 @@ def test_args_03():
         ),
         pytest.param(
             [
-                "--sharedir",
-                "",
                 "--afl-binary-dir",
                 "",
-                "--nyx-instances",
+                "--instances",
                 "2",
                 "--afl-log-pattern",
                 "%d%d",
@@ -113,42 +108,22 @@ def test_args_03():
         ),
         pytest.param(
             [
-                "--sharedir",
-                "",
                 "--afl-binary-dir",
                 "",
-                "--nyx-log-pattern",
-                "%n",
-                "-i",
-                "tmp",
-                "-o",
-                "tmp",
-            ],
-            "nyx-log-pattern %d placeholder not recognized",
-            id="bad-nyx-pattern",
-        ),
-        pytest.param(
-            [
-                "--sharedir",
-                "",
-                "--afl-binary-dir",
-                "",
-                "--nyx-instances",
+                "--instances",
                 "2",
-                "--nyx-log-pattern",
+                "--afl-log-pattern",
                 "%d%d",
                 "-i",
                 "tmp",
                 "-o",
                 "tmp",
             ],
-            "nyx-log-pattern expects exactly one",
-            id="too-many-nyx-pattern",
+            "afl-log-pattern expects exactly one",
+            id="too-many-afl-pattern",
         ),
         pytest.param(
             [
-                "--sharedir",
-                "",
                 "--afl-binary-dir",
                 "",
                 "--afl-hide-logs",
@@ -162,8 +137,6 @@ def test_args_03():
         ),
         pytest.param(
             [
-                "--sharedir",
-                "",
                 "--afl-binary-dir",
                 "",
                 "--max-runtime",
@@ -178,9 +151,37 @@ def test_args_03():
         ),
     ),
 )
-def test_args_04(args, capsys, mocker, msg, tmp_path):
-    """misc nyx args"""
+def test_args_04(args, capsys, mocker, mode, msg, tmp_path):
+    """misc afl/nyx args"""
     mocker.patch("guided_fuzzing_daemon.args.which", return_value=None)
+    (tmp_path / "file").touch()
+    args = [
+        {"tmp": str(tmp_path), "tmp/file": str(tmp_path / "file")}.get(arg, arg)
+        for arg in chain(args, mode)
+    ]
+    with pytest.raises(SystemExit):
+        parse_args(["gfd", *args])
+    stdio = capsys.readouterr()
+    assert msg in stdio.err
+
+
+def test_args_05(capsys):
+    """misc afl args"""
+    with pytest.raises(SystemExit):
+        parse_args(["gfd", "--afl"])
+    stdio = capsys.readouterr()
+    assert "AFL mode expects at least one arg" in stdio.err
+
+
+@pytest.mark.parametrize(
+    "args, msg",
+    (
+        pytest.param([], "specify --sharedir", id="wo-sharedir"),
+        pytest.param([""], "takes no positional", id="extra-args"),
+    ),
+)
+def test_args_06(args, capsys, msg, tmp_path):
+    """misc nyx args"""
     args = [(arg if arg != "tmp" else str(tmp_path)) for arg in args]
     with pytest.raises(SystemExit):
         parse_args(["gfd", "--nyx", *args])
@@ -188,13 +189,13 @@ def test_args_04(args, capsys, mocker, msg, tmp_path):
     assert msg in stdio.err
 
 
-def test_args_05(tmp_path):
+def test_args_07(tmp_path):
     """nyx %d checking"""
     parse_args(
         [
             "gfd",
             "--nyx",
-            "--nyx-instances",
+            "--instances",
             "2",
             "--sharedir",
             "",
@@ -210,7 +211,7 @@ def test_args_05(tmp_path):
     )
 
 
-def test_args_06(mocker, tmp_path):
+def test_args_08(mocker, tmp_path):
     """--afl-binary-dir is found automatically"""
     mocker.patch("guided_fuzzing_daemon.args.which", return_value=tmp_path)
     opts = parse_args(
@@ -228,7 +229,7 @@ def test_args_06(mocker, tmp_path):
     assert opts.aflbindir == tmp_path.parent
 
 
-def test_args_07():
+def test_args_09():
     """--env and --env-percent parsing"""
     opts = parse_args(
         [
@@ -283,7 +284,7 @@ def test_args_07():
         ),
     ),
 )
-def test_args_08(args, capsys, error):
+def test_args_10(args, capsys, error):
     """--env and --env-percent parse errors"""
     with pytest.raises(SystemExit):
         parse_args(["gfd", *args])

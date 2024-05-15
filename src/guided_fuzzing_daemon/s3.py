@@ -748,6 +748,48 @@ def s3_main(opts: Namespace) -> int:
                     sleep(0.1)
                 assert not proc.wait()
 
+            elif opts.mode == "afl":
+                assert (
+                    len(opts.rargs) == 1
+                ), "--afl takes exactly one positional arg (binary)"
+                assert opts.aflbindir.is_dir()
+                binary = Path(opts.rargs[0]).resolve()
+
+                # Run afl-cmin
+                afl_cmin = Path(opts.aflbindir) / "afl-cmin"
+                if not afl_cmin.exists():
+                    print("error: Unable to locate afl-cmin binary.", file=sys.stderr)
+                    return 2
+
+                env = os.environ.copy()
+                env["LD_LIBRARY_PATH"] = f"{binary.parent / 'gtest'}:{binary.parent}"
+
+                afl_cmdline = [
+                    str(afl_cmin),
+                    "-e",
+                    "-i",
+                    str(queues_dir),
+                    "-o",
+                    str(updated_tests_dir),
+                    "-t",
+                    str(opts.afl_timeout),
+                    "-m",
+                    "none",
+                    str(binary),
+                ]
+
+                print("Running afl-cmin")
+                # pylint: disable=consider-using-with
+                proc = Popen(afl_cmdline, stdout=None if opts.debug else DEVNULL)
+                last_stats_report = 0.0
+                while proc.poll() is None:
+                    # Calculate stats
+                    if opts.stats and last_stats_report < time() - 30:
+                        refresh_stats.write_file(opts.stats, [])
+                    last_stats_report = time()
+                    sleep(0.1)
+                assert not proc.wait()
+
             else:
                 cmdline.extend(["-merge=1", str(updated_tests_dir), str(queues_dir)])
 

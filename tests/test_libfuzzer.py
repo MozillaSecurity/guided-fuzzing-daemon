@@ -48,7 +48,7 @@ def test_libfuzzer_01(mocker, tmp_path):
     args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
-    args.libfuzzer_instances = 1
+    args.instances = 1
     args.libfuzzer_restarts = 1
     args.metadata = ["meta1=metaval1", "meta2=metaval2"]
     args.rargs = [str(binary), str(corpus)]
@@ -104,7 +104,7 @@ def test_libfuzzer_02(mocker, tmp_path):
     args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
-    args.libfuzzer_instances = 1
+    args.instances = 1
     args.libfuzzer_restarts = 10
     args.metadata = []
     args.rargs = [str(binary), str(corpus)]
@@ -142,7 +142,7 @@ def test_libfuzzer_03(mocker, tmp_path):
     args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
-    args.libfuzzer_instances = 3
+    args.instances = 3
     args.libfuzzer_restarts = 3
     args.metadata = []
     args.rargs = [str(binary), str(corpus)]
@@ -184,7 +184,7 @@ def test_libfuzzer_04(mocker, tmp_path):
     args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
-    args.libfuzzer_instances = 1
+    args.instances = 1
     args.libfuzzer_restarts = 1
     args.metadata = []
     args.rargs = [str(binary), str(corpus)]
@@ -222,7 +222,7 @@ def test_libfuzzer_05(mocker, tmp_path, capsys):
     args.env_percent = None
     args.libfuzzer_auto_reduce = 5
     args.libfuzzer_auto_reduce_min = 1000
-    args.libfuzzer_instances = 1
+    args.instances = 1
     args.libfuzzer_restarts = 1
     args.metadata = []
     args.rargs = [str(binary)]
