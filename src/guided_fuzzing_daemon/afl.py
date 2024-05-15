@@ -6,36 +6,124 @@ import sys
 from argparse import Namespace
 from pathlib import Path
 from random import choice
-from shutil import copy, rmtree, which
-from subprocess import STDOUT, Popen, TimeoutExpired, run
+from shutil import copy, rmtree
+from subprocess import STDOUT, Popen, TimeoutExpired
 from tempfile import mkdtemp
 from time import sleep, time
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
-from FTB.Signatures.CrashInfo import CrashInfo, TraceParsingError
+from FTB.Running.AutoRunner import AutoRunner
+from FTB.Signatures.CrashInfo import CrashInfo
 
-from .afl import POWER_SCHEDS, AFLStats
 from .s3 import S3Manager
+from .stats import (
+    GeneratedField,
+    MaxTimeField,
+    MeanField,
+    MeanMinMaxField,
+    StatAggregator,
+    SumField,
+    SumMinMaxField,
+    ValueCounterField,
+)
 from .utils import LogTee, create_envs, warn_local
 
-ASAN_SYMBOLIZE = which("asan_symbolize")
+POWER_SCHEDS = ("explore", "coe", "lin", "quad", "exploit", "rare")
 QUEUE_UPLOAD_PERIOD = 7200
 
 
-def nyx_main(
+class AFLStats(StatAggregator):
+    def __init__(self, instances: int) -> None:
+        super().__init__()
+        self.add_field("execs_done", SumMinMaxField())
+        self.add_field("execs_per_sec", SumMinMaxField())
+        self.add_field("pending_favs", SumField())
+        self.add_field("pending_total", SumField())
+        self.add_field("corpus_variable", SumField())
+        self.add_field("saved_crashes", SumField())
+        self.add_field("saved_hangs", SumField())
+        self.add_field("exec_timeout", MeanField())
+        self.add_field("cycles_done", ValueCounterField())
+        self.add_field("bitmap_cvg", MeanMinMaxField(suffix="%"))
+        self.add_field("last_find", MaxTimeField())
+        self.add_field("instances", GeneratedField(suffix=f"/{instances}"))
+        self.add_sys_stats()
+
+    def update_and_write(
+        self,
+        outfile: Path,
+        base_dirs: List[Path],
+    ) -> None:
+        """Generate aggregated statistics from the given base directories
+        and write them to the specified output file.
+
+        Args:
+            outfile: Output file for aggregated statistics
+            base_dirs: List of AFL base directories
+            cmdline_path: Optional command line file to use instead of the
+                          one found inside the base directory.
+        """
+        self.reset()
+        percent_fields = {"bitmap_cvg"}
+
+        any_stat = False
+
+        def convert_num(num: str) -> Union[float, int]:
+            if "." in num or num == "inf":
+                return float(num)
+            return int(num)
+
+        for base_dir in base_dirs:
+            stats_path = base_dir / "fuzzer_stats"
+
+            if stats_path.exists():
+                stats = stats_path.read_text()
+
+                for line in stats.splitlines():
+                    (field_name, field_val) = line.split(":", 1)
+                    field_name = field_name.strip()
+                    field_val = field_val.strip()
+
+                    if field_name not in self.fields:
+                        continue
+
+                    if field_name in percent_fields:
+                        field_val = field_val.rstrip("%")
+
+                    try:
+                        self.fields[field_name].update(convert_num(field_val))
+                    except ValueError as exc:
+                        # ignore errors
+                        print(
+                            f"error reading {field_name} from {stats_path}: {exc}",
+                            file=sys.stderr,
+                        )
+                        continue
+
+                    any_stat = True
+
+        # If we don't have any data here, then the fuzzers haven't written any
+        # statistics yet
+        if not any_stat:
+            return
+
+        self.write_file(outfile, [])
+
+
+def afl_main(
     opts: Namespace, collector: Optional[Collector], s3m: Optional[S3Manager]
 ) -> int:
     assert opts.aflbindir.is_dir()
-    assert opts.sharedir.is_dir()
-    assert ASAN_SYMBOLIZE is not None
-    assert not opts.rargs, "--nyx takes no positional args"
+    assert opts.rargs, "--afl expects at least one positional arg (target binary)"
     assert opts.corpus_in
     assert opts.corpus_out
     assert opts.corpus_in.is_dir()
     assert opts.instances >= 1
 
+    binary = Path(opts.rargs[0]).resolve()
+    assert binary.is_file()
     opts.corpus_out.mkdir(parents=True, exist_ok=True)
 
     if opts.max_runtime == 0.0:
@@ -43,9 +131,7 @@ def nyx_main(
 
     start = last_queue_upload = last_stats_report = time()
     last_afl_start = 0.0
-    base_cfg = ProgramConfiguration.fromBinary(
-        str(opts.sharedir / "firefox" / "firefox")
-    )
+    base_cfg = ProgramConfiguration.fromBinary(binary)
     if collector is not None:
         assert base_cfg
     stats = AFLStats(opts.instances)
@@ -58,7 +144,9 @@ def nyx_main(
 
     # environment settings that apply to all instances
     base_env = os.environ.copy()
+    base_env["AFL_NO_CRASH_README"] = "1"
     base_env["AFL_NO_UI"] = "1"
+    base_env["LD_LIBRARY_PATH"] = f"{binary.parent / 'gtest'}:{binary.parent}"
 
     envs, cfgs = create_envs(base_env, opts, opts.instances, base_cfg)
 
@@ -120,11 +208,6 @@ def nyx_main(
                         this_env["AFL_IMPORT_FIRST"] = "1"
                     if not idx:
                         this_env["AFL_FINAL_SYNC"] = "1"
-                    if opts.afl_log_pattern:
-                        if "%" in opts.afl_log_pattern:
-                            this_env["AFL_NYX_LOG"] = opts.afl_log_pattern % (idx,)
-                        else:
-                            this_env["AFL_NYX_LOG"] = opts.afl_log_pattern
 
                     # pylint: disable=consider-using-with
                     procs[idx] = Popen(
@@ -132,7 +215,6 @@ def nyx_main(
                             str(afl_fuzz),
                             "-t",
                             str(opts.afl_timeout),
-                            "-Y",
                             *cmd,
                             "-i",
                             str(
@@ -145,7 +227,7 @@ def nyx_main(
                             "-o",
                             str(opts.corpus_out.resolve()),
                             "--",
-                            str(opts.sharedir.resolve()),
+                            str(binary),
                         ],
                         text=True,
                         env=this_env,
@@ -159,68 +241,31 @@ def nyx_main(
             log_tee.print()
 
             # submit any crashes
-            for log in opts.corpus_out.glob("*/crashes/*.log"):
-                idx = int(log.parent.parent.name)
-                crash_path = log.with_suffix("")
-                log_content = log.read_text()
-                print(f"symbolizing {log} (len={len(log_content)})", file=sys.stderr)
-                log_content = log_content.replace(
-                    "ld_preload_fuzz_no_pt.so",
-                    str(opts.sharedir.resolve() / "ld_preload_fuzz_no_pt.so"),
-                ).replace(
-                    "/home/user/firefox", str(opts.sharedir.resolve() / "firefox")
-                )
-                sym_result = run(
-                    [ASAN_SYMBOLIZE, "-d"],
-                    input=log_content,
-                    capture_output=True,
-                    text=True,
-                )
-                if sym_result.returncode:
-                    print(
-                        f"asan_symbolize returned {sym_result.returncode}",
-                        file=sys.stderr,
-                    )
-                    print("=" * 20, file=sys.stderr)
-                    if sym_result.stderr.strip():
-                        sys.stderr.write(sym_result.stderr)
-                    print("=" * 20, file=sys.stderr)
-                else:
-                    log_content = symbolized = sym_result.stdout
-                if collector is not None:
-                    log_lines = log_content.splitlines()
-                    try:
+            if collector:
+                for crash_path in opts.corpus_out.glob("*/crashes/*"):
+                    if (
+                        crash_path.suffix == ".processed"
+                        or (
+                            crash_path.parent / f"{crash_path.name}.processed"
+                        ).is_file()
+                    ):
+                        continue
+
+                    # repro to collect logs
+                    crashing_instance = int(crash_path.parent.parent.name)
+                    env = envs[crashing_instance].copy()
+                    env["MOZ_FUZZ_TESTFILE"] = str(crash_path.resolve())
+                    runner = AutoRunner.fromBinaryArgs(binary, env=env)
+                    if runner.run():
+                        crash_info = runner.getCrashInfo(cfgs[crashing_instance])
+                    else:
                         crash_info = CrashInfo.fromRawCrashData(
-                            [],
-                            [],
-                            cfgs[idx],
-                            auxCrashData=log_lines,
+                            [], [], cfgs[crashing_instance]
                         )
-                    except TraceParsingError as exc:
-                        # try again with the error lines omitted
                         print(
-                            "CrashInfo.fromRawCrashData raised TraceParsingError:",
-                            exc,
+                            "Warning: Failed to reproduce the given crash, submitting "
+                            "without crash information.",
                             file=sys.stderr,
-                        )
-                        print("original crash data", file=sys.stderr)
-                        print("=" * 20, file=sys.stderr)
-                        for line_no, line in enumerate(log_lines):
-                            if line_no == exc.line_no:
-                                print(f"=> {line} <=", file=sys.stderr)
-                            else:
-                                print(f"   {line}", file=sys.stderr)
-                        print("=" * 20, file=sys.stderr)
-                        print(
-                            f"Retrying without last {len(log_lines) - exc.line_no} "
-                            "lines",
-                            file=sys.stderr,
-                        )
-                        crash_info = CrashInfo.fromRawCrashData(
-                            [],
-                            log_lines[exc.line_no :],
-                            cfgs[idx],
-                            auxCrashData=log_lines[: exc.line_no],
                         )
 
                     (sigfile, metadata) = collector.search(crash_info)
@@ -241,7 +286,7 @@ def nyx_main(
                             crash_info,
                             str(crash_path),
                             metaData={
-                                "afl-instance": log.parent.parent.name,
+                                "afl-instance": crash_path.parent.parent.name,
                                 "afl-crash": crash_path.name,
                             },
                         )
@@ -250,9 +295,9 @@ def nyx_main(
                             f"{result['shortSignature']}\" as {result['id']}",
                             file=sys.stderr,
                         )
-                elif not sym_result.returncode:
-                    log.with_suffix(".log.symbolized").write_text(symbolized)
-                log.rename(log.with_suffix(".log.processed"))
+                    crash_path.rename(
+                        crash_path.parent / f"{crash_path.name}.processed"
+                    )
 
             # Only upload new corpus files every 2 hours or after corpus reduction
             if (
@@ -262,7 +307,7 @@ def nyx_main(
                 assert s3m is not None
                 s3m.upload_afl_queue_dir(
                     opts.corpus_out / "0",
-                    opts.sharedir / "config.sh",
+                    opts.corpus_out / "0" / "cmdline",
                     include_sync=True,
                 )
                 last_queue_upload = time()
@@ -306,7 +351,9 @@ def nyx_main(
 
         if s3m and opts.s3_queue_upload:
             s3m.upload_afl_queue_dir(
-                opts.corpus_out / "0", opts.sharedir / "config.sh", include_sync=True
+                opts.corpus_out / "0",
+                opts.corpus_out / "0" / "cmdline",
+                include_sync=True,
             )
 
         # final stats

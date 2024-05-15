@@ -326,7 +326,7 @@ def libfuzzer_main(
     if "LD_LIBRARY_PATH" not in base_env:
         base_env["LD_LIBRARY_PATH"] = str(binary.parent)
 
-    envs, cfgs = create_envs(base_env, opts, opts.libfuzzer_instances, base_cfg)
+    envs, cfgs = create_envs(base_env, opts, opts.instances, base_cfg)
 
     signature_repeat_count = 0
     last_signature = None
@@ -387,7 +387,7 @@ def libfuzzer_main(
             if not Path(rarg).is_dir():
                 print(rarg, file=cmdline_fd)
 
-    monitors: List[Optional[LibFuzzerMonitor]] = [None] * opts.libfuzzer_instances
+    monitors: List[Optional[LibFuzzerMonitor]] = [None] * opts.instances
     monitor_queue: "Queue[int]" = Queue()
 
     # Keep track how often we crash to abort in certain situations

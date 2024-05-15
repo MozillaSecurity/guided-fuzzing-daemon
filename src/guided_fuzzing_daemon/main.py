@@ -19,6 +19,7 @@ from typing import List, Optional
 
 from Collector.Collector import Collector
 
+from .afl import afl_main
 from .args import parse_args
 from .libfuzzer import libfuzzer_main
 from .nyx import nyx_main
@@ -71,6 +72,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         s3m = S3Manager(
             opts.s3_bucket, opts.project, opts.build_project, opts.build_zip_name
         )
+
+    if opts.mode == "afl":
+        return afl_main(opts, collector, s3m)
 
     if opts.mode == "libfuzzer":
         return libfuzzer_main(opts, collector, s3m)
