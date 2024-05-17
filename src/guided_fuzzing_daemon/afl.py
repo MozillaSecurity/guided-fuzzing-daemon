@@ -82,7 +82,11 @@ class AFLStats(StatAggregator):
                 stats = stats_path.read_text()
 
                 for line in stats.splitlines():
-                    (field_name, field_val) = line.split(":", 1)
+                    try:
+                        (field_name, field_val) = line.split(":", 1)
+                    except ValueError:
+                        print(f"error parsing status line: {line!r}", file=sys.stderr)
+                        continue
                     field_name = field_name.strip()
                     field_val = field_val.strip()
 
