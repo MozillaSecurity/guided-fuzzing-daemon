@@ -159,6 +159,10 @@ def nyx_main(
             log_tee.print()
 
             # submit any crashes
+            # AFL++ writes crashes in the output directory like:
+            #     {output-dir}/{instance-id}/crashes/{testcase}
+            # Nyx mode also adds `{testcase}.log` beside it, which
+            # is an unsymbolized ASan log copied out of the QEMU VM.
             for log in opts.corpus_out.glob("*/crashes/*.log"):
                 idx = int(log.parent.parent.name)
                 crash_path = log.with_suffix("")
