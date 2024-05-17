@@ -73,6 +73,7 @@ def test_afl_stats_02(mocker, tmp_path):
     (tmp_path / "0" / "fuzzer_stats").write_text(
         "execs_done        : 7.76.17\n"
         "execs_per_sec     : 22.64\n"
+        "bad data doesn't break parsing\n"
         "pending_favs      : 12\n"
         "pending_total     : 21\n"
         "corpus_variable   : 13\n"
