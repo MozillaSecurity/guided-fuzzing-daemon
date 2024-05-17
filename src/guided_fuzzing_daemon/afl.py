@@ -246,6 +246,8 @@ def afl_main(
 
             # submit any crashes
             if collector:
+                # AFL++ writes crashes in the output directory like:
+                #     {output-dir}/{instance-id}/crashes/{testcase}
                 for crash_path in opts.corpus_out.glob("*/crashes/*"):
                     if (
                         crash_path.suffix == ".processed"
