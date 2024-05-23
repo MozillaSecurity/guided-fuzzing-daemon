@@ -120,11 +120,11 @@ def nyx_main(
                         this_env["AFL_IMPORT_FIRST"] = "1"
                     if not idx:
                         this_env["AFL_FINAL_SYNC"] = "1"
-                    if opts.afl_log_pattern:
-                        if "%" in opts.afl_log_pattern:
-                            this_env["AFL_NYX_LOG"] = opts.afl_log_pattern % (idx,)
+                    if opts.nyx_log_pattern:
+                        if "%" in opts.nyx_log_pattern:
+                            this_env["AFL_NYX_LOG"] = opts.nyx_log_pattern % (idx,)
                         else:
-                            this_env["AFL_NYX_LOG"] = opts.afl_log_pattern
+                            this_env["AFL_NYX_LOG"] = opts.nyx_log_pattern
 
                     # pylint: disable=consider-using-with
                     procs[idx] = Popen(
