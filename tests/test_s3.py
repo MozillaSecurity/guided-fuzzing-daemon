@@ -33,7 +33,7 @@ def test_s3_main_01(mocker, arg, method):
 
 
 def test_s3_main_02(mocker, tmp_path):
-    """s3 corpus refresh"""
+    """libfuzzer s3 corpus refresh"""
     mocker.patch("guided_fuzzing_daemon.s3.StatAggregator", autospec=True)
     mgr = mocker.patch("guided_fuzzing_daemon.s3.S3Manager")
     args = mocker.Mock()
@@ -133,3 +133,48 @@ def test_s3_main_04(capsys, mocker):
     assert bucket.list.call_args_list == [mocker.call(prefix="", delimiter="/")]
     stdio = capsys.readouterr()
     assert stdio.out.splitlines() == ["project"]
+
+
+def test_s3_main_05(mocker, tmp_path):
+    """AFL s3 corpus refresh"""
+    mocker.patch("guided_fuzzing_daemon.s3.StatAggregator", autospec=True)
+    mgr = mocker.patch("guided_fuzzing_daemon.s3.S3Manager")
+    args = mocker.Mock()
+    args.mode = "afl"
+    for s3_action in S3_ACTIONS:
+        setattr(args, s3_action, None)
+    args.s3_corpus_refresh = tmp_path
+    args.s3_list_projects = False
+    args.build = None
+    assert s3_main(args) == 0
+    assert mgr.return_value.method_calls == [
+        mocker.call.clean_queue_dirs(),
+        mocker.call.download_queue_dirs(tmp_path),
+    ]
+    mgr.reset_mock()
+    (tmp_path / "cmdline").write_text("build/firefox")
+    (tmp_path / "build").mkdir()
+
+    def fake_run(*_args, **_kwds):
+        (tmp_path / "tests" / "test").touch()
+        return mocker.DEFAULT
+
+    (tmp_path / "queues").mkdir()
+    binary = tmp_path / "build" / "firefox"
+    binary.touch()
+    binary.chmod(0o777)
+    popen = mocker.patch("guided_fuzzing_daemon.s3.Popen", side_effect=fake_run)
+    popen.return_value.wait.return_value = 0
+    args.rargs = [str(binary)]
+    args.aflbindir = tmp_path
+    assert s3_main(args) == 2
+    mgr.reset_mock()
+    (tmp_path / "afl-cmin").touch()
+    assert s3_main(args) == 0
+    assert mgr.return_value.method_calls == [
+        mocker.call.clean_queue_dirs(),
+        mocker.call.download_queue_dirs(tmp_path),
+        mocker.call.download_build(tmp_path / "build"),
+        mocker.call.download_corpus(tmp_path / "queues"),
+        mocker.call.upload_corpus(tmp_path / "tests", corpus_delete=True),
+    ]
