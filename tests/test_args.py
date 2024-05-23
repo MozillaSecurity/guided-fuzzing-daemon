@@ -94,6 +94,20 @@ def test_args_03():
             [
                 "--afl-binary-dir",
                 "",
+                "--nyx-log-pattern",
+                "%n",
+                "-i",
+                "tmp",
+                "-o",
+                "tmp",
+            ],
+            "nyx-log-pattern %d placeholder not recognized",
+            id="bad-nyx-pattern",
+        ),
+        pytest.param(
+            [
+                "--afl-binary-dir",
+                "",
                 "--instances",
                 "2",
                 "--afl-log-pattern",
@@ -112,15 +126,15 @@ def test_args_03():
                 "",
                 "--instances",
                 "2",
-                "--afl-log-pattern",
+                "--nyx-log-pattern",
                 "%d%d",
                 "-i",
                 "tmp",
                 "-o",
                 "tmp",
             ],
-            "afl-log-pattern expects exactly one",
-            id="too-many-afl-pattern",
+            "nyx-log-pattern expects exactly one",
+            id="too-many-nyx-pattern",
         ),
         pytest.param(
             [
@@ -153,6 +167,8 @@ def test_args_03():
 )
 def test_args_04(args, capsys, mocker, mode, msg, tmp_path):
     """misc afl/nyx args"""
+    if "--afl" in mode and "--nyx-log-pattern" in args:
+        pytest.skip()
     mocker.patch("guided_fuzzing_daemon.args.which", return_value=None)
     (tmp_path / "file").touch()
     args = [

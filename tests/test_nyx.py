@@ -95,6 +95,8 @@ def nyx_common(mocker, tmp_path):
             self.aflbindir.mkdir()
             self.corpus_in.mkdir()
 
+            self.args.afl_add_corpus = []
+            self.args.afl_async_corpus = False
             self.args.afl_hide_logs = False
             self.args.afl_log_pattern = None
             self.args.aflbindir = self.aflbindir
@@ -104,12 +106,10 @@ def nyx_common(mocker, tmp_path):
             self.args.corpus_out = self.corpus_out
             self.args.env = None
             self.args.env_percent = None
+            self.args.instances = 1
             self.args.max_runtime = 0.0
             self.args.metadata = []
-            self.args.afl_async_corpus = False
-            self.args.afl_add_corpus = []
-            self.args.instances = 1
-            self.args.afl_log_pattern = None
+            self.args.nyx_log_pattern = None
             self.args.rargs = []
             self.args.s3_queue_upload = False
             self.args.sharedir = self.sharedir
@@ -424,8 +424,9 @@ def test_nyx_08(capsys, hide, instances, nyx, pattern, tmp_path):
     # setup
     nyx.sleep.side_effect = chain(repeat(None, 124), [NyxMainBreak, None])
     nyx.args.afl_hide_logs = hide
-    nyx.args.afl_log_pattern = str(tmp_path / f"nyx{pattern}")
+    nyx.args.afl_log_pattern = str(tmp_path / f"afl{pattern}")
     nyx.args.instances = instances
+    nyx.args.nyx_log_pattern = str(tmp_path / f"nyx{pattern}")
 
     out = []
     out_line = [None] * instances
@@ -469,7 +470,7 @@ def test_nyx_08(capsys, hide, instances, nyx, pattern, tmp_path):
     # nyx log should have been given as env var
     for chld in nyx.popen.call_args_list:
         idx = _instance_no(chld.args)
-        filename = nyx.args.afl_log_pattern
+        filename = nyx.args.nyx_log_pattern
         if pattern:
             filename = filename % (idx,)
         assert chld.kwargs["env"]["AFL_NYX_LOG"] == filename

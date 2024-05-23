@@ -272,6 +272,11 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
         type=Path,
         metavar="DIR",
     )
+    nyx_group.add_argument(
+        "--nyx-log-pattern",
+        help="Write Nyx hprint logs to a separate path (and hide on console). Must "
+        "contain %%d placeholder if --nyx-instances > 1.",
+    )
 
     fm_group.add_argument(
         "--custom-cmdline-file",
@@ -348,8 +353,8 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
     afl_group.add_argument(
         "--afl-hide-logs",
         action="store_true",
-        help="Don't print AFL logs on stdout. Requires --afl-log-pattern. "
-        "(applies to Nyx)",
+        help="Don't print AFL logs on stdout. Requires --afl-log-pattern or "
+        "--nyx-log-pattern. (applies to Nyx)",
     )
     afl_group.add_argument(
         "--test-file",
@@ -486,6 +491,10 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
             parser.error("Nyx mode takes no positional args")
         if not opts.sharedir or not opts.sharedir.is_dir():
             parser.error("Must specify --sharedir with --nyx")
+        if opts.nyx_log_pattern is not None:
+            _check_log_pattern(
+                opts.instances, opts.nyx_log_pattern, "--nyx-log-pattern", parser
+            )
 
     if opts.mode == "afl":
         if not opts.rargs or not Path(opts.rargs[0]).is_file():
@@ -504,8 +513,14 @@ def parse_args(argv: Optional[List[str]] = None) -> Namespace:
             _check_log_pattern(
                 opts.instances, opts.afl_log_pattern, "--afl-log-pattern", parser
             )
-        if opts.afl_hide_logs and opts.afl_log_pattern is None:
-            parser.error("--afl-hide-logs requires --afl-log-pattern")
+        if (
+            opts.afl_hide_logs
+            and opts.afl_log_pattern is None
+            and (opts.mode == "afl" or opts.nyx_log_pattern is None)
+        ):
+            parser.error(
+                "--afl-hide-logs requires --afl-log-pattern or --nyx-log-pattern"
+            )
         if opts.max_runtime < 0:
             parser.error("--max-runtime must be positive (or 0 to disable).")
 
