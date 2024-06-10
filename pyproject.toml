@@ -22,6 +22,23 @@ exclude_lines = [
     "pragma: no cover",
 ]
 
+[tool.lint.isort]
+known-first-party = ["guided_fuzzing_daemon"]
+
+[tool.lint.select]
+select = [
+    # flake8
+    "E",
+    "F",
+    "W",
+    # isort
+    "I",
+    # pyupgrade
+    "UP",
+    # includes yesqa
+    "RUF",
+]
+
 [tool.mypy]
 ignore_missing_imports = true
 strict = true
@@ -63,21 +80,6 @@ filterwarnings = [
 log_level = "DEBUG"
 
 [tool.ruff]
-select = [
-    # flake8
-    "E",
-    "F",
-    "W",
-    # isort
-    "I",
-    # pyupgrade
-    "UP",
-    # includes yesqa
-    "RUF",
-]
 target-version = "py38"
-
-[tool.ruff.isort]
-known-first-party = ["guided_fuzzing_daemon"]
 
 [tool.setuptools_scm]

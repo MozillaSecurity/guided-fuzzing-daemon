@@ -68,7 +68,7 @@ class LibFuzzerMonitor(Thread):
         self.hit_thread_limit = False
         self.inited = False
         self.mid = mid
-        self.mqueue: Optional["Queue[int]"] = mqueue
+        self.mqueue: Optional[Queue[int]] = mqueue
 
         # Keep some statistics
         self.cov = 0
@@ -388,7 +388,7 @@ def libfuzzer_main(
                 print(rarg, file=cmdline_fd)
 
     monitors: List[Optional[LibFuzzerMonitor]] = [None] * opts.instances
-    monitor_queue: "Queue[int]" = Queue()
+    monitor_queue: Queue[int] = Queue()
 
     # Keep track how often we crash to abort in certain situations
     crashes_per_minute_interval = 0

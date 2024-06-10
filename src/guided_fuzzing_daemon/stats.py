@@ -449,7 +449,7 @@ class StatAggregator:
     __slots__ = ("fields",)
 
     def __init__(self) -> None:
-        self.fields: "OrderedDict[str, Field]" = OrderedDict()
+        self.fields: OrderedDict[str, Field] = OrderedDict()
 
     def reset(self) -> None:
         for field in self.fields.values():
