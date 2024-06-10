@@ -57,6 +57,10 @@ tasks:
             version: "3.10"
             env:
               TOXENV: py310,lint
+          - name: tests python 3.11
+            version: "3.11"
+            env:
+              TOXENV: py311,lint
 
   in:
     $if: >
@@ -93,6 +97,6 @@ tasks:
         metadata:
           name: ${project_name} CI decision
           description: Schedule CI tasks for ${project_name}
-          owner: truber@mozilla.com
-          source: https://github.com/MozillaSecurity/guided-fuzzing-daemon
+          owner: '${user}@users.noreply.github.com'
+          source: ${http_repo}/raw/${fetch_rev}/.taskcluster.yml
     else: []

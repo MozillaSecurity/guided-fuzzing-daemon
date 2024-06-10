@@ -156,7 +156,7 @@ def afl_main(
 
     warn_local(opts)
 
-    procs: List[Optional["Popen[str]"]] = [None] * opts.instances
+    procs: List[Optional[Popen[str]]] = [None] * opts.instances
     log_tee = LogTee(opts.afl_hide_logs, opts.instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"

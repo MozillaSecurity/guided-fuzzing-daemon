@@ -64,7 +64,7 @@ def nyx_main(
 
     warn_local(opts)
 
-    procs: List[Optional["Popen[str]"]] = [None] * opts.instances
+    procs: List[Optional[Popen[str]]] = [None] * opts.instances
     log_tee = LogTee(opts.afl_hide_logs, opts.instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
@@ -189,6 +189,7 @@ def nyx_main(
                     if sym_result.stderr.strip():
                         sys.stderr.write(sym_result.stderr)
                     print("=" * 20, file=sys.stderr)
+                    symbolized = ""
                 else:
                     log_content = symbolized = sym_result.stdout
                 if collector is not None:
