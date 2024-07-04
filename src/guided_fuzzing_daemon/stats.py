@@ -1,13 +1,15 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from datetime import datetime, timezone
 from math import isnan
 from pathlib import Path
 from time import time
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Iterable
 
 from fasteners import InterProcessLock
 from psutil import cpu_count, cpu_percent, disk_usage, virtual_memory
@@ -34,7 +36,7 @@ class Field(ABC):
 
     @property
     @abstractmethod
-    def value(self) -> Union[float, int]:
+    def value(self) -> float | int:
         pass
 
     @property
@@ -71,11 +73,11 @@ class GeneratedField(Field):
         self._ignore_reset = ignore_reset
         self._value: int = 0
 
-    def __iadd__(self, value: int) -> "GeneratedField":
+    def __iadd__(self, value: int) -> GeneratedField:
         self._value += value
         return self
 
-    def __isub__(self, value: int) -> "GeneratedField":
+    def __isub__(self, value: int) -> GeneratedField:
         self._value -= value
         return self
 
@@ -93,13 +95,13 @@ class GeneratedField(Field):
 
 
 class TimeField(Field):
-    __slots__: Tuple[str, ...] = ()
+    __slots__: tuple[str, ...] = ()
 
     def __init__(self, generated: bool = True) -> None:
         super().__init__(generated=generated)
 
     @property
-    def value(self) -> Union[float, int]:
+    def value(self) -> float | int:
         return time()
 
     def __str__(self) -> str:
@@ -115,7 +117,7 @@ class ListField(Field):
 
     def __init__(self) -> None:
         super().__init__()
-        self._values: List[str] = []
+        self._values: list[str] = []
 
     @property
     def value(self) -> int:
@@ -137,7 +139,7 @@ class ValueCounterField(Field):
 
     def __init__(self) -> None:
         super().__init__()
-        self._values: Dict[Any, int] = {}
+        self._values: dict[Any, int] = {}
 
     @property
     def value(self) -> int:
@@ -163,7 +165,7 @@ class JoinField(Field):
 
     def __init__(self, fields: Iterable[Field]) -> None:
         super().__init__(generated=True)
-        self._fields: Tuple[Field, ...] = tuple(fields)
+        self._fields: tuple[Field, ...] = tuple(fields)
 
     @property
     def value(self) -> int:
@@ -232,11 +234,11 @@ class MaxField(Field):
 
     def __init__(self, ignore_reset: bool = False, suffix: str = "") -> None:
         super().__init__(suffix=suffix)
-        self._value: Optional[int] = None
+        self._value: int | None = None
         self._ignore_reset = ignore_reset
 
     @property
-    def value(self) -> Union[float, int]:
+    def value(self) -> float | int:
         if self._value is None:
             return float("nan")
         return self._value
@@ -261,7 +263,7 @@ class MaxTimeField(TimeField):
         self._max = MaxField(ignore_reset)
 
     @property
-    def value(self) -> Union[float, int]:
+    def value(self) -> float | int:
         return self._max.value
 
     def __str__(self) -> str:
@@ -282,10 +284,10 @@ class MinField(Field):
 
     def __init__(self, suffix: str = "") -> None:
         super().__init__(suffix=suffix)
-        self._value: Optional[int] = None
+        self._value: int | None = None
 
     @property
-    def value(self) -> Union[float, int]:
+    def value(self) -> float | int:
         if self._value is None:
             return float("nan")
         return self._value
@@ -377,7 +379,7 @@ class MeanMinMaxField(Field):
 
 
 class CPUField(Field):
-    __slots__: Tuple[str, ...] = ()
+    __slots__: tuple[str, ...] = ()
 
     def __init__(self) -> None:
         super().__init__(generated=True)
@@ -402,7 +404,7 @@ class CPUField(Field):
 
 
 class MemoryField(Field):
-    __slots__: Tuple[str, ...] = ()
+    __slots__: tuple[str, ...] = ()
 
     def __init__(self) -> None:
         super().__init__(generated=True)
@@ -424,7 +426,7 @@ class MemoryField(Field):
 
 
 class DiskField(Field):
-    __slots__: Tuple[str, ...] = ()
+    __slots__: tuple[str, ...] = ()
 
     def __init__(self) -> None:
         super().__init__(generated=True)
@@ -449,7 +451,7 @@ class StatAggregator:
     __slots__ = ("fields",)
 
     def __init__(self) -> None:
-        self.fields: "OrderedDict[str, Field]" = OrderedDict()
+        self.fields: OrderedDict[str, Field] = OrderedDict()
 
     def reset(self) -> None:
         for field in self.fields.values():

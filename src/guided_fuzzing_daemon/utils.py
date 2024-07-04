@@ -1,6 +1,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from __future__ import annotations
+
 import subprocess
 import sys
 import tempfile
@@ -11,7 +13,7 @@ from copy import copy
 from math import log10
 from pathlib import Path
 from random import uniform
-from typing import Dict, List, TextIO, Tuple
+from typing import TextIO
 
 from FTB.ProgramConfiguration import ProgramConfiguration
 
@@ -52,8 +54,8 @@ def apply_transform(script_path: Path, testcase_path: Path) -> Path:
 
 
 def create_envs(
-    env: Dict[str, str], opts: Namespace, instances: int, cfg: ProgramConfiguration
-) -> Tuple[Tuple[Dict[str, str], ...], Tuple[ProgramConfiguration, ...]]:
+    env: dict[str, str], opts: Namespace, instances: int, cfg: ProgramConfiguration
+) -> tuple[tuple[dict[str, str], ...], tuple[ProgramConfiguration, ...]]:
     """Create a list of environments and configurations for each fuzzing instance.
 
     Arguments:
@@ -163,7 +165,7 @@ class LogFile:
 
 class LogTee:
     def __init__(self, hide: bool, instances: int) -> None:
-        self.open_files: List[LogFile] = []
+        self.open_files: list[LogFile] = []
         if instances > 1:
             self.instance_width = int(log10(instances - 1)) + 1
         else:

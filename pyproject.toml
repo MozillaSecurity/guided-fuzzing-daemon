@@ -1,6 +1,55 @@
 [build-system]
-requires = ["setuptools >= 43", "wheel", "setuptools_scm[toml] >= 3.4"]
+requires = ["setuptools>=64", "setuptools_scm>8"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "guided-fuzzing-daemon"
+requires-python = ">=3.8"
+authors = [
+    {name = "Christian Holler", email = "choller@mozilla.com"},
+    {name = "Jesse Schwartzentruber", email = "jschwartzentruber@mozilla.com"},
+]
+description = "Runner for multiple parallel guided fuzzer instances of Firefox."
+keywords = ["firefox", "fuzz", "fuzzing", "test", "testing"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: Software Development :: Testing",
+]
+license = {text = "MPL 2.0"}
+maintainers = [
+    {name = "Mozilla Fuzzing Team", email = "fuzzing@mozilla.com"},
+]
+dynamic = ["readme", "version"]
+dependencies = [
+    "FuzzManager>=0.6.0",
+    "boto",
+    "fasteners",
+    "psutil",
+]
+
+[project.optional-dependencies]
+dev = ["pre-commit", "tox"]
+
+[project.scripts]
+guided-fuzzing-daemon = "guided_fuzzing_daemon.main:main"
+
+[project.urls]
+Homepage = "https://github.com/MozillaSecurity/guided-fuzzing-daemon"
+Issues = "https://github.com/MozillaSecurity/guided-fuzzing-daemon/issues"
+Repository = "https://github.com/MozillaSecurity/guided-fuzzing-daemon.git"
+
+[tool.setuptools.dynamic]
+readme = {file = ["README.md"], content-type = "text/markdown"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["guided_fuzzing_daemon"]
+
+[tool.codespell]
+ignore-regex = "\\[fnrstv]"
 
 [tool.coverage.run]
 omit = [
@@ -68,14 +117,17 @@ select = [
     "E",
     "F",
     "W",
+    # flynt
+    "FLY",
     # isort
     "I",
+    # perflint
+    "PERF",
     # pyupgrade
     "UP",
     # includes yesqa
     "RUF",
 ]
-target-version = "py38"
 
 [tool.ruff.isort]
 known-first-party = ["guided_fuzzing_daemon"]

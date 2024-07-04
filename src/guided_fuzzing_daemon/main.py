@@ -13,9 +13,10 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 @contact:    choller@mozilla.com
 """
+from __future__ import annotations
+
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 from Collector.Collector import Collector
 
@@ -26,7 +27,7 @@ from .nyx import nyx_main
 from .s3 import S3Manager, s3_main
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Command line options."""
 
     opts = parse_args(argv)

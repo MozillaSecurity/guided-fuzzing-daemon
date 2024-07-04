@@ -1,6 +1,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from __future__ import annotations
+
 import os
 import re
 import sys
@@ -14,7 +16,7 @@ from tempfile import mkdtemp
 from threading import Thread
 from time import sleep, time
 from traceback import print_exc
-from typing import Deque, List, Optional, cast
+from typing import cast
 
 from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
@@ -48,9 +50,9 @@ NO_CORPUS_MSG = "INFO: A corpus is not provided, starting from an empty corpus"
 class LibFuzzerMonitor(Thread):
     def __init__(
         self,
-        process: "Popen[str]",
+        process: Popen[str],
         mid: int,
-        mqueue: "Queue[int]",
+        mqueue: Queue[int],
         kill_on_oom: bool = True,
     ) -> None:
         Thread.__init__(self)
@@ -59,16 +61,16 @@ class LibFuzzerMonitor(Thread):
         stderr = process.stderr
         assert stderr is not None
         self.process_stderr = stderr
-        self.trace: List[str] = []
-        self.stderr: Deque[str] = deque([], 128)
+        self.trace: list[str] = []
+        self.stderr: deque[str] = deque([], 128)
         self.in_trace = False
-        self.testcase: Optional[Path] = None
+        self.testcase: Path | None = None
         self.kill_on_oom = kill_on_oom
         self.had_oom = False
         self.hit_thread_limit = False
         self.inited = False
         self.mid = mid
-        self.mqueue: Optional["Queue[int]"] = mqueue
+        self.mqueue: Queue[int] | None = mqueue
 
         # Keep some statistics
         self.cov = 0
@@ -80,7 +82,7 @@ class LibFuzzerMonitor(Thread):
         self.last_new_pc = 0
 
         # Store potential exceptions
-        self.exc: Optional[Exception] = None
+        self.exc: Exception | None = None
 
     def run(self) -> None:
         assert not self.hit_thread_limit
@@ -170,13 +172,13 @@ class LibFuzzerMonitor(Thread):
             if self.mqueue is not None:
                 self.mqueue.put(self.mid)
 
-    def get_asan_trace(self) -> List[str]:
+    def get_asan_trace(self) -> list[str]:
         return self.trace
 
-    def get_testcase(self) -> Optional[Path]:
+    def get_testcase(self) -> Path | None:
         return self.testcase
 
-    def get_stderr(self) -> List[str]:
+    def get_stderr(self) -> list[str]:
         return list(self.stderr)
 
     def terminate(self) -> None:
@@ -224,8 +226,8 @@ class LibFuzzerStats(StatAggregator):
     def update_and_write(
         self,
         outfile: Path,
-        monitors: List[Optional[LibFuzzerMonitor]],
-        warnings: List[str],
+        monitors: list[LibFuzzerMonitor | None],
+        warnings: list[str],
     ) -> None:
         self.reset()
 
@@ -241,13 +243,13 @@ class LibFuzzerStats(StatAggregator):
         self.write_file(outfile, warnings)
 
 
-def _extend_unique(lst: List[str], ext: List[str]) -> None:
+def _extend_unique(lst: list[str], ext: list[str]) -> None:
     """As list.extend, but only values not already in the list are appended"""
     lst.extend(val for val in ext if val not in set(lst))
 
 
 def libfuzzer_main(
-    opts: Namespace, collector: Optional[Collector], s3m: Optional[S3Manager]
+    opts: Namespace, collector: Collector | None, s3m: S3Manager | None
 ) -> int:
     assert opts.rargs
     binary = Path(opts.rargs[0])
@@ -358,7 +360,7 @@ def libfuzzer_main(
     original_corpus = {item.name for item in corpus_dir.iterdir()}
 
     corpus_auto_reduce_threshold = None
-    corpus_auto_reduce_ratio: Optional[float] = None
+    corpus_auto_reduce_ratio: float | None = None
     if opts.libfuzzer_auto_reduce is not None:
         assert opts.libfuzzer_auto_reduce >= 5
 
@@ -387,8 +389,8 @@ def libfuzzer_main(
             if not Path(rarg).is_dir():
                 print(rarg, file=cmdline_fd)
 
-    monitors: List[Optional[LibFuzzerMonitor]] = [None] * opts.instances
-    monitor_queue: "Queue[int]" = Queue()
+    monitors: list[LibFuzzerMonitor | None] = [None] * opts.instances
+    monitor_queue: Queue[int] = Queue()
 
     # Keep track how often we crash to abort in certain situations
     crashes_per_minute_interval = 0
@@ -436,7 +438,7 @@ def libfuzzer_main(
                     monitors[idx] = mon
                     mon.start()
 
-            corpus_size: Optional[int] = None
+            corpus_size: int | None = None
             if corpus_auto_reduce_threshold is not None or opts.stats:
                 # We need the corpus size for stats and the auto reduce feature,
                 # so we cache it here to avoid running listdir multiple times.
@@ -491,7 +493,7 @@ def libfuzzer_main(
                 print("Running automated merge...", file=sys.stderr)
                 env = os.environ.copy()
                 env["LD_LIBRARY_PATH"] = str(Path(merge_cmdline[0]).parent)
-                devnull: Optional[int] = DEVNULL
+                devnull: int | None = DEVNULL
                 if opts.debug:
                     devnull = None
                 run(merge_cmdline, stdout=devnull, env=env, check=True)
