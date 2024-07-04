@@ -15,6 +15,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 @contact:    choller@mozilla.com
 """
+from __future__ import annotations
+
 import hashlib
 import os
 import platform
@@ -27,7 +29,7 @@ from pathlib import Path, PurePosixPath
 from subprocess import DEVNULL, Popen, run
 from tempfile import mkstemp
 from time import sleep, time
-from typing import Dict, Iterable, Optional, Set
+from typing import Iterable
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from boto.s3.connection import S3Connection
@@ -45,7 +47,7 @@ class S3Manager:
         self,
         bucket_name: str,
         project_name: str,
-        build_project_name: Optional[str] = None,
+        build_project_name: str | None = None,
         zip_name: str = "build.zip",
     ):
         """Initialize S3Manager
@@ -79,11 +81,11 @@ class S3Manager:
         # Memorize which files we have uploaded/downloaded before, so we never attempt
         # to re-upload them to a different queue or re-download them after a local
         # merge.
-        self.uploaded_files: Set[str] = set()
-        self.downloaded_files: Set[str] = set()
+        self.uploaded_files: set[str] = set()
+        self.downloaded_files: set[str] = set()
 
     def upload_libfuzzer_queue_dir(
-        self, base_dir: Path, corpus_dir: Path, original_corpus: Set[str]
+        self, base_dir: Path, corpus_dir: Path, original_corpus: set[str]
     ) -> None:
         """Synchronize the corpus directory of the specified libFuzzer corpus directory
         to the specified S3 bucket. This method only uploads files that don't
@@ -195,7 +197,7 @@ class S3Manager:
 
         self.__upload_queue_files(queue_path, queue_files, base_path, cmdline_path)
 
-    def download_queue_dirs(self, work_path: Path) -> Dict[str, int]:
+    def download_queue_dirs(self, work_path: Path) -> dict[str, int]:
         """Downloads all queue files into the queues sub directory of the specified
         local work directory. The files are renamed to match their SHA1 hashes
         to avoid file collisions.
@@ -211,7 +213,7 @@ class S3Manager:
         download_path = work_path / "queues"
         download_path.mkdir(exist_ok=True)
 
-        queue_counts: Dict[str, int] = {}
+        queue_counts: dict[str, int] = {}
 
         remote_keys = list(self.bucket.list(self.remote_path_queues))
 
@@ -298,7 +300,7 @@ class S3Manager:
 
         self.bucket.delete_keys(remote_keys_for_deletion, quiet=True)
 
-    def get_queue_status(self) -> Dict[str, int]:
+    def get_queue_status(self) -> dict[str, int]:
         """Return status data for all queues in the specified S3 bucket/project
 
         Returns:
@@ -335,7 +337,7 @@ class S3Manager:
 
         return status_data
 
-    def get_corpus_status(self) -> Dict[str, int]:
+    def get_corpus_status(self) -> dict[str, int]:
         """Return status data for the corpus of the specified S3 bucket/project
 
         Args:
@@ -403,7 +405,7 @@ class S3Manager:
         remote_key.set_contents_from_filename(str(build_path))
 
     def download_corpus(
-        self, corpus_dir: Path, random_subset_size: Optional[int] = None
+        self, corpus_dir: Path, random_subset_size: int | None = None
     ) -> int:
         """Downloads the test corpus from the specified S3 bucket and project
         into the specified directory, without overwriting any files.
@@ -488,22 +490,14 @@ class S3Manager:
         os.remove(zip_dest)
 
         remote_path = self.remote_path_corpus
-        remote_files = [
+        remote_files = {
             key.name.replace(remote_path, "", 1)
             for key in list(self.bucket.list(remote_path))
+        }
+
+        upload_list = [
+            test_file for test_file in test_files if test_file.name not in remote_files
         ]
-
-        upload_list = []
-        delete_list = []
-
-        for test_file in test_files:
-            if test_file.name not in remote_files:
-                upload_list.append(test_file)
-
-        if corpus_delete:
-            for remote_file in remote_files:
-                if (corpus_dir / remote_file) not in test_files:
-                    delete_list.append(remote_path + remote_file)
 
         for upload_file in upload_list:
             remote_key = Key(self.bucket)
@@ -512,6 +506,11 @@ class S3Manager:
             remote_key.set_contents_from_filename(str(upload_file))
 
         if corpus_delete:
+            delete_list = [
+                (remote_path + remote_file)
+                for remote_file in remote_files
+                if (corpus_dir / remote_file) not in test_files
+            ]
             self.bucket.delete_keys(delete_list, quiet=True)
 
     @staticmethod
@@ -551,10 +550,10 @@ class S3Manager:
     ) -> None:
         machine_id = self.__get_machine_id(base_dir)
         remote_path = f"{self.remote_path_queues}{machine_id}/"
-        remote_files = [
+        remote_files = {
             key.name.replace(remote_path, "", 1)
             for key in list(self.bucket.list(remote_path))
-        ]
+        }
 
         if "closed" in remote_files:
             # The queue we are assigned has been closed remotely.
@@ -562,16 +561,16 @@ class S3Manager:
             print(f"Remote queue {machine_id} closed, switching to new queue...")
             machine_id = self.__get_machine_id(base_dir, refresh=True)
             remote_path = f"{self.remote_path_queues}{machine_id}/"
-            remote_files = [
+            remote_files = {
                 key.name.replace(remote_path, "", 1)
                 for key in list(self.bucket.list(remote_path))
-            ]
+            }
 
-        upload_list = []
-
-        for queue_file in queue_files:
-            if queue_file not in remote_files:
-                upload_list.append(queue_basedir / queue_file)
+        upload_list = [
+            (queue_basedir / queue_file)
+            for queue_file in queue_files
+            if queue_file not in remote_files
+        ]
 
         if cmdline_file.name not in remote_files:
             upload_list.append(cmdline_file)
@@ -804,7 +803,7 @@ def s3_main(opts: Namespace) -> int:
                 print("Running libFuzzer merge")
                 env = os.environ.copy()
                 env["LD_LIBRARY_PATH"] = str(Path(cmdline[0]).parent)
-                devnull: Optional[int] = DEVNULL
+                devnull: int | None = DEVNULL
                 if opts.debug:
                     devnull = None
                 # pylint: disable=consider-using-with

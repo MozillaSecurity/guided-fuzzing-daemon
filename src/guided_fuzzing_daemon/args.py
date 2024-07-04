@@ -1,12 +1,13 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from __future__ import annotations
+
 import re
 import sys
 from argparse import REMAINDER, ArgumentParser, Namespace
 from pathlib import Path
 from shutil import which
-from typing import List, Optional
 
 
 def _check_log_pattern(
@@ -30,7 +31,7 @@ def _check_log_pattern(
         parser.error(f"{arg_name} is malformed: {exc}")
 
 
-def parse_args(argv: Optional[List[str]] = None) -> Namespace:
+def parse_args(argv: list[str] | None = None) -> Namespace:
     if argv is None:
         argv = sys.argv.copy()  # pragma: no cover
 

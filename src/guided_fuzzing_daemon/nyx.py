@@ -1,6 +1,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from __future__ import annotations
+
 import os
 import sys
 from argparse import Namespace
@@ -10,7 +12,6 @@ from shutil import copy, rmtree, which
 from subprocess import STDOUT, Popen, TimeoutExpired, run
 from tempfile import mkdtemp
 from time import sleep, time
-from typing import List, Optional
 
 from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
@@ -25,7 +26,7 @@ QUEUE_UPLOAD_PERIOD = 7200
 
 
 def nyx_main(
-    opts: Namespace, collector: Optional[Collector], s3m: Optional[S3Manager]
+    opts: Namespace, collector: Collector | None, s3m: S3Manager | None
 ) -> int:
     assert opts.aflbindir.is_dir()
     assert opts.sharedir.is_dir()
@@ -64,7 +65,7 @@ def nyx_main(
 
     warn_local(opts)
 
-    procs: List[Optional["Popen[str]"]] = [None] * opts.instances
+    procs: list[Popen[str] | None] = [None] * opts.instances
     log_tee = LogTee(opts.afl_hide_logs, opts.instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
@@ -189,6 +190,8 @@ def nyx_main(
                     if sym_result.stderr.strip():
                         sys.stderr.write(sym_result.stderr)
                     print("=" * 20, file=sys.stderr)
+                    # silence pylint (possibly-used-before-assignment)
+                    symbolized = ""
                 else:
                     log_content = symbolized = sym_result.stdout
                 if collector is not None:

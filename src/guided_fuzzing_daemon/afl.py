@@ -1,6 +1,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from __future__ import annotations
+
 import os
 import sys
 from argparse import Namespace
@@ -10,7 +12,6 @@ from shutil import copy, rmtree
 from subprocess import STDOUT, Popen, TimeoutExpired
 from tempfile import mkdtemp
 from time import sleep, time
-from typing import List, Optional, Union
 
 from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
@@ -54,7 +55,7 @@ class AFLStats(StatAggregator):
     def update_and_write(
         self,
         outfile: Path,
-        base_dirs: List[Path],
+        base_dirs: list[Path],
     ) -> None:
         """Generate aggregated statistics from the given base directories
         and write them to the specified output file.
@@ -70,7 +71,7 @@ class AFLStats(StatAggregator):
 
         any_stat = False
 
-        def convert_num(num: str) -> Union[float, int]:
+        def convert_num(num: str) -> float | int:
             if "." in num or num == "inf":
                 return float(num)
             return int(num)
@@ -117,7 +118,7 @@ class AFLStats(StatAggregator):
 
 
 def afl_main(
-    opts: Namespace, collector: Optional[Collector], s3m: Optional[S3Manager]
+    opts: Namespace, collector: Collector | None, s3m: S3Manager | None
 ) -> int:
     assert opts.aflbindir.is_dir()
     assert opts.rargs, "--afl expects at least one positional arg (target binary)"
@@ -156,7 +157,7 @@ def afl_main(
 
     warn_local(opts)
 
-    procs: List[Optional["Popen[str]"]] = [None] * opts.instances
+    procs: list[Popen[str] | None] = [None] * opts.instances
     log_tee = LogTee(opts.afl_hide_logs, opts.instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
