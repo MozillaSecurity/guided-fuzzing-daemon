@@ -111,7 +111,7 @@ filterwarnings = [
 ]
 log_level = "DEBUG"
 
-[tool.ruff]
+[tool.ruff.lint]
 select = [
     # flake8
     "E",
@@ -129,7 +129,7 @@ select = [
     "RUF",
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-first-party = ["guided_fuzzing_daemon"]
 
 [tool.setuptools_scm]
