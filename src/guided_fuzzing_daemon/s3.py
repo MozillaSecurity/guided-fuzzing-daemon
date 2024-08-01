@@ -780,7 +780,9 @@ def s3_main(opts: Namespace) -> int:
 
                 print("Running afl-cmin")
                 # pylint: disable=consider-using-with
-                proc = Popen(afl_cmdline, stdout=None if opts.debug else DEVNULL)
+                proc = Popen(
+                    afl_cmdline, stdout=None if opts.debug else DEVNULL, env=env
+                )
                 last_stats_report = 0.0
                 while proc.poll() is None:
                     # Calculate stats

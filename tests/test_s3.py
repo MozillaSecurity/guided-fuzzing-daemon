@@ -2,6 +2,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from pathlib import Path
+
 import pytest
 
 from guided_fuzzing_daemon.s3 import s3_main
@@ -155,8 +157,15 @@ def test_s3_main_05(mocker, tmp_path):
     (tmp_path / "cmdline").write_text("build/firefox")
     (tmp_path / "build").mkdir()
 
-    def fake_run(*_args, **_kwds):
+    def fake_run(*_args, **kwds):
         (tmp_path / "tests" / "test").touch()
+        assert "env" in kwds
+        assert "LD_LIBRARY_PATH" in kwds["env"]
+        ld_lib_path = tuple(Path(p) for p in kwds["env"]["LD_LIBRARY_PATH"].split(":"))
+        assert {binary.parent / "gtest", binary.parent} <= set(ld_lib_path)
+        assert ld_lib_path.index(binary.parent / "gtest") < ld_lib_path.index(
+            binary.parent
+        )
         return mocker.DEFAULT
 
     (tmp_path / "queues").mkdir()
