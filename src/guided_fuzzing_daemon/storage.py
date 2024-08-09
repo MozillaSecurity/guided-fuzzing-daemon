@@ -48,8 +48,8 @@ def Executor() -> Iterator[ThreadPoolExecutor]:  # pylint: disable=invalid-name
         # the typing for this is almost impossible until 3.10
         # see `typing.ParamSpec`
         # pylint: disable=arguments-differ
-        def submit(self, fn, path):  # type: ignore
-            job = super().submit(fn, path)
+        def submit(self, fn, *args, **kwds):  # type: ignore
+            job = super().submit(fn, *args, **kwds)
             jobs.append(job)
             _check_jobs()
             return job
@@ -236,17 +236,20 @@ class S3Storage(CloudStorageProvider):
             assert isinstance(file, S3File)
             assert file._provider is self  # pylint: disable=protected-access
             keys.append({"Key": str(file.path)})
-        while keys:
-            self.client.delete_objects(
-                Bucket=self.bucket_name, Delete={"Objects": keys[:1000], "Quiet": True}
-            )
-            keys = keys[1000:]
+        with Executor() as executor:
+            while keys:
+                executor.submit(
+                    self.client.delete_objects,
+                    Bucket=self.bucket_name,
+                    Delete={"Objects": keys[:1000], "Quiet": True},
+                )
+                keys = keys[1000:]
 
     def iter(self, prefix: PurePosixPath) -> Iterable[CloudStorageFile]:
         result = self.client.list_objects_v2(
             Bucket=self.bucket_name, Prefix=f"{prefix}/"
         )
-        for obj in result["Contents"]:
+        for obj in result.get("Contents", ()):
             yield S3File(PurePosixPath(obj["Key"]), obj["LastModified"], self)
         while result["IsTruncated"]:
             result = self.client.list_objects_v2(
@@ -324,7 +327,10 @@ class GoogleCloudStorage(CloudStorageProvider):
             assert isinstance(file, GCSFile)
             assert file._provider is self  # pylint: disable=protected-access
             file_list.append(str(file.path))
-        self.bucket.delete_blobs(file_list)
+        with Executor() as executor:
+            while file_list:
+                executor.submit(self.bucket.delete_blobs, file_list[:100])
+                file_list = file_list[100:]
 
     def iter(self, prefix: PurePosixPath) -> Iterator[CloudStorageFile]:
         for blob in self.bucket.list_blobs(prefix=f"{prefix}/"):
@@ -335,7 +341,8 @@ class GoogleCloudStorage(CloudStorageProvider):
         # must consume iterator to get the response
         for _ in blobs:
             pass
-        yield from blobs.prefixes
+        for result in blobs.prefixes:
+            yield result[:-1]  # trim trailing delimiter
 
     def __getitem__(self, name: PurePosixPath) -> CloudStorageFile:
         return GCSFile(name, None, self)
