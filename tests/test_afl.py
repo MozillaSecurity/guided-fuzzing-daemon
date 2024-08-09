@@ -4,7 +4,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from itertools import chain, count, repeat
 from os import chdir
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from subprocess import TimeoutExpired
 
 import pytest
@@ -12,7 +12,7 @@ from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
 
 from guided_fuzzing_daemon.afl import afl_main
-from guided_fuzzing_daemon.s3 import S3Manager
+from guided_fuzzing_daemon.storage import CloudStorageFile, CloudStorageProvider
 
 
 class MainBreak(Exception):
@@ -40,21 +40,31 @@ def _instance_no(popen_args):
 def afl_common(mocker, tmp_path):
     """afl unittest boilerplate"""
 
+    def storage_file_factory(path):
+        file_type = mocker.Mock(spec=CloudStorageFile)
+        file_type.return_value.path = PurePosixPath(path)
+        return file_type()
+
+    def iter_impl(prefix):
+        if "/queues/" in str(prefix):
+            yield storage_file_factory("project/queues/test.bin")
+        else:
+            yield storage_file_factory("project/corpus/test.bin")
+
     class _result:
         aflbindir = tmp_path / "aflbindir"
-        (tmp_path / "target").touch()
         args = mocker.Mock()
         autorunner = mocker.patch("guided_fuzzing_daemon.afl.AutoRunner", autospec=True)
         cfg = mocker.patch(
             "guided_fuzzing_daemon.afl.ProgramConfiguration", autospec=True
         )
-        crash_info = mocker.patch("guided_fuzzing_daemon.afl.CrashInfo", autospec=True)
         collector = mocker.Mock(spec=Collector)
         corpus_in = tmp_path / "corpus"
         corpus_out = tmp_path / "corpus.out"
+        crash_info = mocker.patch("guided_fuzzing_daemon.afl.CrashInfo", autospec=True)
         popen = mocker.patch("guided_fuzzing_daemon.afl.Popen", autospec=True)
-        s3m = mocker.Mock(spec=S3Manager)
-        sharedir = tmp_path / "sharedir"
+        s3m = mocker.Mock(spec=CloudStorageProvider)
+        s3m.iter.side_effect = iter_impl
         # set `side_effect=chain(repeat(None, <n>), [MainBreak])` to control how many
         # times the main loop will iterate before breaking
         sleep = mocker.patch(
@@ -88,31 +98,38 @@ def afl_common(mocker, tmp_path):
                 return mocker.DEFAULT
 
             self.popen.side_effect = popen_touch_fuzzer_stats
-            (self.sharedir / "firefox").mkdir(parents=True)
-            binary = self.sharedir / "firefox" / "firefox"
+            (tmp_path / "firefox").mkdir(parents=True)
+            binary = tmp_path / "firefox" / "firefox"
             binary.touch()
             self.aflbindir.mkdir()
             self.corpus_in.mkdir()
-
-            self.args.afl_hide_logs = False
-            self.args.afl_log_pattern = None
-            self.args.aflbindir = self.aflbindir
-            self.args.corpus_in = self.corpus_in
             (self.corpus_in / "test1.bin").write_text("A")
             (self.corpus_in / "test2.bin").write_text("B")
+
+            self.args.afl_add_corpus = []
+            self.args.afl_async_corpus = False
+            self.args.afl_hide_logs = False
+            self.args.afl_log_pattern = None
+            self.args.afl_log_pattern = None
+            self.args.aflbindir = self.aflbindir
+            self.args.bucket = "bucket"
+            self.args.corpus_in = self.corpus_in
             self.args.corpus_out = self.corpus_out
+            self.args.corpus_refresh = False
             self.args.env = None
             self.args.env_percent = None
+            self.args.instances = 1
             self.args.max_runtime = 0.0
             self.args.metadata = []
-            self.args.afl_async_corpus = False
-            self.args.afl_add_corpus = []
-            self.args.instances = 1
-            self.args.afl_log_pattern = None
-            self.args.rargs = [str(tmp_path / "target")]
-            self.args.s3_queue_upload = False
-            self.args.sharedir = self.sharedir
+            self.args.project = "project"
+            self.args.provider = "test"
+            self.args.queue_upload = False
+            self.args.rargs = [str(tmp_path / "firefox" / "firefox")]
             self.args.stats = None
+
+        def ret_main(self):
+            chdir(tmp_path)
+            return afl_main(self.args, self.collector, self.s3m)
 
         def main(self):
             chdir(tmp_path)
@@ -148,7 +165,7 @@ def test_afl_01(afl, mocker, tmp_path):
     assert afl.popen.call_args.kwargs["env"] == {
         "AFL_NO_CRASH_README": "1",
         "AFL_NO_UI": "1",
-        "LD_LIBRARY_PATH": f"{tmp_path / 'gtest'}:{tmp_path}",
+        "LD_LIBRARY_PATH": f"{tmp_path / 'firefox' / 'gtest'}:{tmp_path / 'firefox'}",
         "genv1": "gval1",
         "env1": "val1",
         "env2": "val2",
@@ -166,16 +183,16 @@ def test_afl_02(afl, mocker):
     # setup
     mocker.patch("guided_fuzzing_daemon.afl.QUEUE_UPLOAD_PERIOD", 90)
     afl.sleep.side_effect = chain(repeat(None, 60), [MainBreak, None])
-    afl.args.s3_queue_upload = True
+    afl.args.queue_upload = True
+    syncer = mocker.patch("guided_fuzzing_daemon.afl.CorpusSyncer", autospec=True)
 
     # test
     afl.main()
 
     # check that upload is called once in the loop, once in finally
-    assert afl.s3m.upload_afl_queue_dir.call_count == 2
-    assert afl.s3m.upload_afl_queue_dir.call_args == mocker.call(
-        afl.corpus_out / "0", afl.corpus_out / "0" / "cmdline", include_sync=True
-    )
+    assert syncer.call_count == 1
+    assert syncer.call_args[0][1].path == afl.corpus_out / "0" / "queue"
+    assert syncer.return_value.upload_queue.call_count == 2
 
 
 def test_afl_03a(afl):
@@ -200,7 +217,7 @@ def test_afl_03a(afl):
     assert popen.wait.call_count == 1
 
 
-def test_afl_03b(afl, capsys):
+def test_afl_03b(afl, caplog):
     """afl subprocess are terminated then killed but kill is ignored"""
     afl.sleep.side_effect = chain(repeat(None, 64), [MainBreak], repeat(None))
 
@@ -217,8 +234,9 @@ def test_afl_03b(afl, capsys):
     assert popen.poll.call_count > 0
     assert popen.kill.call_count == 1
     assert popen.wait.call_count == 1
-    stdio = capsys.readouterr()
-    assert "123 did not exit after SIGKILL" in stdio.err
+    assert any(
+        "123 did not exit after SIGKILL" in record.message for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize(
@@ -314,12 +332,12 @@ def test_afl_05(afl, mocker, tmp_path):
         "AFL_IMPORT_FIRST": "1",
         "AFL_NO_CRASH_README": "1",
         "AFL_NO_UI": "1",
-        "LD_LIBRARY_PATH": f"{tmp_path / 'gtest'}:{tmp_path}",
+        "LD_LIBRARY_PATH": f"{tmp_path / 'firefox' / 'gtest'}:{tmp_path / 'firefox'}",
     }
     assert sec.kwargs["env"] == {
         "AFL_NO_CRASH_README": "1",
         "AFL_NO_UI": "1",
-        "LD_LIBRARY_PATH": f"{tmp_path / 'gtest'}:{tmp_path}",
+        "LD_LIBRARY_PATH": f"{tmp_path / 'firefox' / 'gtest'}:{tmp_path / 'firefox'}",
     }
     assert (
         main.args[0][main.args[0].index("-i") + 1]
@@ -505,3 +523,53 @@ def test_afl_11(afl, mocker, tmp_path):
     main, sec = popen_calls
     assert set(_get_path_args("-F", main.args[0])) == {corpus_add}
     assert set(_get_path_args("-F", sec.args[0])) == set()
+
+
+def test_afl_refresh_01(afl, mocker, tmp_path):
+    """AFL corpus refresh cmin"""
+    # setup
+    mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    afl.args.corpus_refresh = tmp_path / "refresh"
+
+    # should fail without afl-cmin
+    assert afl.ret_main() == 2
+
+
+def test_afl_refresh_02(afl, mocker, tmp_path):
+    """AFL corpus refresh"""
+    # setup
+    stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    afl.args.corpus_refresh = tmp_path / "refresh"
+    (afl.aflbindir / "afl-cmin").touch()
+
+    def fake_run(*_args, **kwds):
+        (tmp_path / "refresh" / "tests" / "min.bin").touch()
+        assert "env" in kwds
+        assert "LD_LIBRARY_PATH" in kwds["env"]
+        ld_lib_path = tuple(Path(p) for p in kwds["env"]["LD_LIBRARY_PATH"].split(":"))
+        assert {binary.parent / "gtest", binary.parent} <= set(ld_lib_path)
+        assert ld_lib_path.index(binary.parent / "gtest") < ld_lib_path.index(
+            binary.parent
+        )
+        return mocker.DEFAULT
+
+    binary = tmp_path / "firefox" / "firefox"
+    afl.args.stats = tmp_path / "stats"
+    afl.popen.side_effect = fake_run
+    afl.popen.return_value.poll.side_effect = chain(repeat(None, 35), [0])
+    afl.sleep.side_effect = repeat(None)
+    afl.popen.return_value.wait.return_value = 0
+
+    # test
+    result = afl.ret_main()
+
+    # check
+    assert result == 0
+    assert syncer.return_value.method_calls == [
+        mocker.call.download_corpus(),
+        mocker.call.download_queues(),
+        mocker.call.upload_corpus(delete_existing=True),
+    ]
+    assert stats.return_value.write_file.call_count == 2

@@ -5,7 +5,7 @@
 from functools import partial
 from itertools import chain, count, repeat
 from os import chdir
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from queue import Empty
 
 import pytest
@@ -15,245 +15,167 @@ from guided_fuzzing_daemon.libfuzzer import (
     LibFuzzerStats,
     libfuzzer_main,
 )
-from guided_fuzzing_daemon.s3 import S3Manager
+from guided_fuzzing_daemon.storage import CloudStorageFile, CloudStorageProvider
 
 
-def test_libfuzzer_01(mocker, tmp_path):
+@pytest.fixture(name="libf")
+def libfuzzer_common(mocker, tmp_path):
+    """libfuzzer unittest boilerplate"""
+
+    def storage_file_factory(path):
+        file_type = mocker.Mock(spec=CloudStorageFile)
+        file_type.return_value.path = PurePosixPath(path)
+        return file_type()
+
+    def iter_impl(prefix):
+        if "/queues/" in str(prefix):
+            yield storage_file_factory("project/queues/test.bin")
+        else:
+            yield storage_file_factory("project/corpus/test.bin")
+
+    class _result:
+        args = mocker.Mock()
+        asan_test = mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
+        cfg = mocker.patch("guided_fuzzing_daemon.libfuzzer.ProgramConfiguration")
+        collector = mocker.Mock()
+        mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
+        monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
+        popen = mocker.patch("guided_fuzzing_daemon.libfuzzer.Popen")
+        queue = mocker.patch("guided_fuzzing_daemon.libfuzzer.Queue")
+        mocker.patch("guided_fuzzing_daemon.libfuzzer.run")
+        s3m = mocker.Mock(spec=CloudStorageProvider)
+        s3m.iter.side_effect = iter_impl
+        mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
+        writer = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
+
+        def __init__(self):
+            self.monitor.return_value.exc = None
+            self.monitor.return_value.inited = True
+            self.monitor.return_value.is_alive.return_value = False
+
+            binary = tmp_path / "firefox"
+            binary.touch()
+            corpus = tmp_path / "corpus"
+            corpus.mkdir()
+            chdir(tmp_path)
+
+            self.args.bucket = "bucket"
+            self.args.corpus_refresh = False
+            self.args.env = None
+            self.args.env_percent = None
+            self.args.instances = 1
+            self.args.libfuzzer_auto_reduce = 5
+            self.args.libfuzzer_auto_reduce_min = 1000
+            self.args.libfuzzer_restarts = 1
+            self.args.metadata = []
+            self.args.project = "project"
+            self.args.provider = "test"
+            self.args.rargs = [str(binary), str(corpus)]
+            self.args.stats = None
+
+        def ret_main(self):
+            return libfuzzer_main(self.args, self.collector, self.s3m)
+
+    yield _result()
+
+
+def test_libfuzzer_01(libf, mocker, tmp_path):
     """monitor exit terminates main"""
-    popen = mocker.patch("guided_fuzzing_daemon.libfuzzer.Popen")
-    cfg = mocker.patch("guided_fuzzing_daemon.libfuzzer.ProgramConfiguration")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.run")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    writer = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
-    monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
     mocker.patch("os.environ", {"genv1": "gval1"})
-    monitor.return_value.is_alive.return_value = False
-    monitor.return_value.inited = True
-    monitor.return_value.exc = None
-    queue = mocker.patch("guided_fuzzing_daemon.libfuzzer.Queue")
-    queue.return_value.get.side_effect = chain([0], repeat(Empty))
+    libf.queue.return_value.get.side_effect = chain([0], repeat(Empty))
+    libf.args.env = {"env1": "val1", "env2": "val2"}
+    libf.args.metadata = ["meta1=metaval1", "meta2=metaval2"]
+    corpus = libf.args.rargs[-1]
 
-    args = mocker.Mock()
-    collector = mocker.Mock()
-    s3m = mocker.Mock(spec=S3Manager)
-
-    binary = tmp_path / "firefox"
-    binary.touch()
-    corpus = tmp_path / "corpus"
-    corpus.mkdir()
-    chdir(tmp_path)
-    args.env = {"env1": "val1", "env2": "val2"}
-    args.env_percent = None
-    args.libfuzzer_auto_reduce = 5
-    args.libfuzzer_auto_reduce_min = 1000
-    args.instances = 1
-    args.libfuzzer_restarts = 1
-    args.metadata = ["meta1=metaval1", "meta2=metaval2"]
-    args.rargs = [str(binary), str(corpus)]
-    args.stats = None
-
-    assert libfuzzer_main(args, collector, s3m) == 0
-    assert monitor.call_count == 1
-    assert queue.return_value.get.call_count == 2
-    assert writer.update_and_write.call_count == 0
-    cfg_inst = cfg.fromBinary.return_value
+    assert libf.ret_main() == 0
+    assert libf.monitor.call_count == 1
+    assert libf.queue.return_value.get.call_count == 2
+    assert libf.writer.update_and_write.call_count == 0
+    cfg_inst = libf.cfg.fromBinary.return_value
     assert cfg_inst.addEnvironmentVariables.call_args_list == [
         mocker.call({"env1": "val1", "env2": "val2"})
     ]
     assert cfg_inst.addMetadata.call_args_list == [
         mocker.call({"meta1": "metaval1", "meta2": "metaval2"})
     ]
-    assert popen.call_args.kwargs["env"] == {
+    assert libf.popen.call_args.kwargs["env"] == {
         "LD_LIBRARY_PATH": str(tmp_path),
         "genv1": "gval1",
         "env1": "val1",
         "env2": "val2",
     }
-    assert cfg_inst.addProgramArguments.call_args_list == [mocker.call([str(corpus)])]
+    assert cfg_inst.addProgramArguments.call_args_list == [mocker.call([corpus])]
 
 
-def test_libfuzzer_02(mocker, tmp_path):
+def test_libfuzzer_02(libf):
     """libfuzzer-restarts determines number of tries before exit"""
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.Popen")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.ProgramConfiguration")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.run")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
-    monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
-    monitor.return_value.is_alive.return_value = False
-    monitor.return_value.inited = True
-    monitor.return_value.exc = None
-    queue = mocker.patch("guided_fuzzing_daemon.libfuzzer.Queue")
     # queue.get indicates the monitor exited (which means the target exited)
-    queue.return_value.get.side_effect = chain([0] * 10, repeat(Empty))
+    libf.queue.return_value.get.side_effect = chain([0] * 10, repeat(Empty))
+    libf.args.libfuzzer_restarts = 10
 
-    args = mocker.Mock()
-    collector = mocker.Mock()
-    s3m = mocker.Mock(spec=S3Manager)
-
-    binary = tmp_path / "firefox"
-    binary.touch()
-    corpus = tmp_path / "corpus"
-    corpus.mkdir()
-    chdir(tmp_path)
-    args.env = None
-    args.env_percent = None
-    args.libfuzzer_auto_reduce = 5
-    args.libfuzzer_auto_reduce_min = 1000
-    args.instances = 1
-    args.libfuzzer_restarts = 10
-    args.metadata = []
-    args.rargs = [str(binary), str(corpus)]
-    args.stats = None
-    assert libfuzzer_main(args, collector, s3m) == 0
-    assert queue.return_value.get.call_count == 11
+    assert libf.ret_main() == 0
+    assert libf.queue.return_value.get.call_count == 11
 
 
-def test_libfuzzer_03(mocker, tmp_path):
+def test_libfuzzer_03(libf):
     """libfuzzer-instances creates multiple monitors"""
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.Popen")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.ProgramConfiguration")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.run")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
-    monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
-    monitor.return_value.is_alive.return_value = False
-    monitor.return_value.inited = True
-    monitor.return_value.exc = None
-    queue = mocker.patch("guided_fuzzing_daemon.libfuzzer.Queue")
-    queue.return_value.get.side_effect = chain([0, 1, 2], repeat(Empty))
+    libf.queue.return_value.get.side_effect = chain([0, 1, 2], repeat(Empty))
+    libf.args.instances = 3
+    libf.args.libfuzzer_restarts = 3
 
-    args = mocker.Mock()
-    collector = mocker.Mock()
-    s3m = mocker.Mock(spec=S3Manager)
-
-    binary = tmp_path / "firefox"
-    binary.touch()
-    corpus = tmp_path / "corpus"
-    corpus.mkdir()
-    chdir(tmp_path)
-    args.env = None
-    args.env_percent = None
-    args.libfuzzer_auto_reduce = 5
-    args.libfuzzer_auto_reduce_min = 1000
-    args.instances = 3
-    args.libfuzzer_restarts = 3
-    args.metadata = []
-    args.rargs = [str(binary), str(corpus)]
-    args.stats = None
-    assert libfuzzer_main(args, collector, s3m) == 0
-    assert monitor.call_count == 3
-    assert queue.return_value.get.call_count == 3
+    assert libf.ret_main() == 0
+    assert libf.monitor.call_count == 3
+    assert libf.queue.return_value.get.call_count == 3
 
 
-def test_libfuzzer_04(mocker, tmp_path):
+def test_libfuzzer_04(libf, mocker):
     """stats are written"""
     mocker.patch("guided_fuzzing_daemon.libfuzzer.CrashInfo")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.Popen")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.ProgramConfiguration")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.run")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    writer = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
-    monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
-    monitor.return_value.is_alive.return_value = False
-    monitor.return_value.inited = True
-    monitor.return_value.exc = None
-    monitor.return_value.get_testcase.return_value.name = "crash-"
-    queue = mocker.patch("guided_fuzzing_daemon.libfuzzer.Queue")
-    queue.return_value.get.side_effect = chain([Empty, 0], repeat(Empty))
+    libf.monitor.return_value.get_testcase.return_value.name = "crash-"
+    libf.queue.return_value.get.side_effect = chain([Empty, 0], repeat(Empty))
+    libf.collector.search.return_value = (None, None)
+    libf.args.stats = True
 
-    args = mocker.Mock()
-    collector = mocker.Mock()
-    collector.search.return_value = (None, None)
-    s3m = mocker.Mock(spec=S3Manager)
-
-    binary = tmp_path / "firefox"
-    binary.touch()
-    corpus = tmp_path / "corpus"
-    corpus.mkdir()
-    chdir(tmp_path)
-    args.env = None
-    args.env_percent = None
-    args.libfuzzer_auto_reduce = 5
-    args.libfuzzer_auto_reduce_min = 1000
-    args.instances = 1
-    args.libfuzzer_restarts = 1
-    args.metadata = []
-    args.rargs = [str(binary), str(corpus)]
-    args.stats = True
-    assert libfuzzer_main(args, collector, s3m) == 0
-    assert monitor.call_count == 1
-    assert queue.return_value.get.call_count == 3
-    assert writer.call_count > 0
+    assert libf.ret_main() == 0
+    assert libf.monitor.call_count == 1
+    assert libf.queue.return_value.get.call_count == 3
+    assert libf.writer.call_count > 0
 
 
-def test_libfuzzer_05(mocker, tmp_path, capsys):
+def test_libfuzzer_05(libf, tmp_path, capsys):
     """negative arg tests"""
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.Popen")
-    cfg = mocker.patch("guided_fuzzing_daemon.libfuzzer.ProgramConfiguration")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.run")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
-    asan_test = mocker.patch("guided_fuzzing_daemon.libfuzzer.test_binary_asan")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.warn_local")
-    mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
-    monitor = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerMonitor")
-    monitor.return_value.is_alive.return_value = False
-    monitor.return_value.inited = True
-    monitor.return_value.exc = None
-    queue = mocker.patch("guided_fuzzing_daemon.libfuzzer.Queue")
-    queue.return_value.get.side_effect = chain([0], repeat(Empty))
+    libf.queue.return_value.get.side_effect = chain([0], repeat(Empty))
+    (tmp_path / "firefox").unlink()
+    binary, corpus = map(Path, libf.args.rargs)
+    libf.args.rargs.pop()
 
-    args = mocker.Mock()
-    collector = mocker.Mock()
-    s3m = mocker.Mock(spec=S3Manager)
-
-    binary = tmp_path / "firefox"
-    corpus = tmp_path / "corpus"
-    corpus.mkdir()
-    args.env = None
-    args.env_percent = None
-    args.libfuzzer_auto_reduce = 5
-    args.libfuzzer_auto_reduce_min = 1000
-    args.instances = 1
-    args.libfuzzer_restarts = 1
-    args.metadata = []
-    args.rargs = [str(binary)]
-    args.stats = None
-    assert libfuzzer_main(args, collector, s3m) == 2
+    assert libf.ret_main() == 2
     stdio = capsys.readouterr()
     assert "binary does not exist" in stdio.err
     binary.touch()
 
-    assert libfuzzer_main(args, collector, s3m) == 2
+    assert libf.ret_main() == 2
     stdio = capsys.readouterr()
     assert "corpus directory" in stdio.err
-    args.rargs.append(str(corpus))
+    libf.args.rargs.append(str(corpus))
 
-    args.rargs.append("-jobs=")
-    assert libfuzzer_main(args, collector, s3m) == 2
+    libf.args.rargs.append("-jobs=")
+    assert libf.ret_main() == 2
     stdio = capsys.readouterr()
     assert "-jobs and -workers is incompatible" in stdio.err
-    args.rargs[-1] = "-workers="
-    assert libfuzzer_main(args, collector, s3m) == 2
+    libf.args.rargs[-1] = "-workers="
+    assert libf.ret_main() == 2
     stdio = capsys.readouterr()
     assert "-jobs and -workers is incompatible" in stdio.err
-    args.rargs.pop()
+    libf.args.rargs.pop()
 
-    asan_test.return_value = False
-    assert libfuzzer_main(args, collector, s3m) == 2
+    libf.asan_test.return_value = False
+    assert libf.ret_main() == 2
     stdio = capsys.readouterr()
     assert "binaries built with AddressSanitizer" in stdio.err
 
-    cfg.fromBinary.return_value = None
-    assert libfuzzer_main(args, collector, s3m) == 2
+    libf.cfg.fromBinary.return_value = None
+    assert libf.ret_main() == 2
     stdio = capsys.readouterr()
     assert "load program configuration" in stdio.err
 
@@ -475,3 +397,38 @@ def test_libfuzzer_stats_01(mocker):
     assert str(stats.fields["crashes/timeouts/ooms"]) == "12, 50, 3333"
     assert str(stats.fields["last_new"]) == "1970-01-01T00:01:40Z"
     assert str(stats.fields["last_new_pc"]) == "1970-01-01T00:01:10Z"
+
+
+def test_libfuzzer_refresh_01(libf, mocker, tmp_path):
+    """libFuzzer corpus refresh"""
+    # setup
+    stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    libf.args.corpus_refresh = tmp_path / "refresh"
+
+    def fake_run(*args, **kwds):
+        (tmp_path / "refresh" / "tests" / "min.bin").touch()
+        assert "-merge=1" in args[0]
+        assert "env" in kwds
+        assert "LD_LIBRARY_PATH" in kwds["env"]
+        ld_lib_path = {Path(p) for p in kwds["env"]["LD_LIBRARY_PATH"].split(":")}
+        assert binary.parent in ld_lib_path
+        return mocker.DEFAULT
+
+    binary = tmp_path / "firefox"
+    libf.args.stats = tmp_path / "stats"
+    libf.popen.side_effect = fake_run
+    libf.popen.return_value.poll.side_effect = chain(repeat(None, 35), [0])
+    libf.popen.return_value.wait.return_value = 0
+
+    # test
+    result = libf.ret_main()
+
+    # check
+    assert result == 0
+    assert syncer.return_value.method_calls == [
+        mocker.call.download_corpus(),
+        mocker.call.download_queues(),
+        mocker.call.upload_corpus(delete_existing=True),
+    ]
+    assert stats.return_value.write_file.call_count == 2

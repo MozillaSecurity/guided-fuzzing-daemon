@@ -18,14 +18,14 @@ from guided_fuzzing_daemon.args import parse_args
             ["--libfuzzer-auto-reduce=0"], "Auto reduce threshold", id="lf-auto-reduce"
         ),
         pytest.param(
-            ["--s3-list-projects"],
-            "Must specify --s3-bucket",
-            id="s3-list-projects",
+            ["--list-projects"],
+            "Must specify --bucket",
+            id="list-projects",
         ),
         pytest.param(
-            ["--s3-corpus-refresh=nx"],
-            "Must specify both --s3-bucket",
-            id="s3-corp-refresh",
+            ["--corpus-refresh=nx"],
+            "Must specify both --bucket",
+            id="corp-refresh",
         ),
     ),
 )
@@ -43,22 +43,6 @@ def test_args_02(capsys, tmp_path):
         parse_args(["gfd", "--transform", str(tmp_path / "nx")])
     stdio = capsys.readouterr()
     assert "Failed to locate transformation" in stdio.err
-
-
-def test_args_03():
-    """libfuzzer does not need args when doing s3 actions"""
-    parse_args(
-        [
-            "gfd",
-            "--libfuzzer",
-            "--s3-corpus-refresh",
-            "corpus",
-            "--s3-bucket",
-            "bucket",
-            "--project",
-            "test",
-        ]
-    )
 
 
 @pytest.mark.parametrize("mode", (["--afl", "tmp/file"], ["--nyx", "--sharedir", ""]))
@@ -165,7 +149,7 @@ def test_args_03():
         ),
     ),
 )
-def test_args_04(args, capsys, mocker, mode, msg, tmp_path):
+def test_args_03(args, capsys, mocker, mode, msg, tmp_path):
     """misc afl/nyx args"""
     if "--afl" in mode and "--nyx-log-pattern" in args:
         pytest.skip()
@@ -181,7 +165,7 @@ def test_args_04(args, capsys, mocker, mode, msg, tmp_path):
     assert msg in stdio.err
 
 
-def test_args_05(capsys):
+def test_args_04(capsys):
     """misc afl args"""
     with pytest.raises(SystemExit):
         parse_args(["gfd", "--afl"])
@@ -196,7 +180,7 @@ def test_args_05(capsys):
         pytest.param([""], "takes no positional", id="extra-args"),
     ),
 )
-def test_args_06(args, capsys, msg, tmp_path):
+def test_args_05(args, capsys, msg, tmp_path):
     """misc nyx args"""
     args = [(arg if arg != "tmp" else str(tmp_path)) for arg in args]
     with pytest.raises(SystemExit):
@@ -205,7 +189,7 @@ def test_args_06(args, capsys, msg, tmp_path):
     assert msg in stdio.err
 
 
-def test_args_07(tmp_path):
+def test_args_06(tmp_path):
     """nyx %d checking"""
     parse_args(
         [
@@ -227,7 +211,7 @@ def test_args_07(tmp_path):
     )
 
 
-def test_args_08(mocker, tmp_path):
+def test_args_07(mocker, tmp_path):
     """--afl-binary-dir is found automatically"""
     mocker.patch("guided_fuzzing_daemon.args.which", return_value=tmp_path)
     opts = parse_args(
@@ -245,7 +229,7 @@ def test_args_08(mocker, tmp_path):
     assert opts.aflbindir == tmp_path.parent
 
 
-def test_args_09():
+def test_args_08():
     """--env and --env-percent parsing"""
     opts = parse_args(
         [
@@ -300,7 +284,7 @@ def test_args_09():
         ),
     ),
 )
-def test_args_10(args, capsys, error):
+def test_args_09(args, capsys, error):
     """--env and --env-percent parse errors"""
     with pytest.raises(SystemExit):
         parse_args(["gfd", *args])
