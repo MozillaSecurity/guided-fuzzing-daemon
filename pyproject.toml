@@ -25,8 +25,9 @@ maintainers = [
 dynamic = ["readme", "version"]
 dependencies = [
     "FuzzManager>=0.6.0",
-    "boto",
+    "boto3",
     "fasteners",
+    "google-cloud-storage",
     "psutil",
 ]
 

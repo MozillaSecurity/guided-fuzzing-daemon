@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import os
-import sys
 from argparse import Namespace
+from logging import getLogger
 from pathlib import Path
 from random import choice
 from shutil import copy, rmtree, which
-from subprocess import STDOUT, Popen, TimeoutExpired, run
+from subprocess import DEVNULL, STDOUT, Popen, TimeoutExpired, run
 from tempfile import mkdtemp
 from time import sleep, time
 
@@ -18,26 +18,77 @@ from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import CrashInfo, TraceParsingError
 
 from .afl import POWER_SCHEDS, AFLStats
-from .s3 import S3Manager
+from .storage import CloudStorageProvider, Corpus, CorpusRefreshContext, CorpusSyncer
 from .utils import LogTee, create_envs, warn_local
 
 ASAN_SYMBOLIZE = which("asan_symbolize")
+LOG = getLogger("gfd.nyx")
 QUEUE_UPLOAD_PERIOD = 7200
 
 
 def nyx_main(
-    opts: Namespace, collector: Collector | None, s3m: S3Manager | None
+    opts: Namespace,
+    collector: Collector | None,
+    storage: CloudStorageProvider,
 ) -> int:
     assert opts.aflbindir.is_dir()
     assert opts.sharedir.is_dir()
     assert ASAN_SYMBOLIZE is not None
     assert not opts.rargs, "--nyx takes no positional args"
+
+    if opts.corpus_refresh:
+        # Run afl-cmin
+        afl_cmin = Path(opts.aflbindir) / "afl-cmin"
+        if not afl_cmin.exists():
+            LOG.error("error: Unable to locate afl-cmin binary.")
+            return 2
+
+        with CorpusRefreshContext(opts, storage) as merger:
+            afl_cmdline = [
+                str(afl_cmin),
+                "-e",
+                "-i",
+                str(merger.queues_dir),
+                "-o",
+                str(merger.updated_tests_dir),
+                "-t",
+                str(opts.afl_timeout),
+                "-m",
+                "none",
+                "-X",
+                str(opts.sharedir),
+            ]
+
+            LOG.info("Running afl-cmin")
+            # pylint: disable=consider-using-with
+            proc: Popen[str] | None = Popen(
+                afl_cmdline, stdout=None if opts.debug else DEVNULL, text=True
+            )
+            last_stats_report = 0.0
+            assert proc is not None
+            while proc.poll() is None:
+                # Calculate stats
+                if opts.stats and last_stats_report < time() - 30:
+                    merger.refresh_stats.write_file(opts.stats, [])
+                    last_stats_report = time()
+                sleep(0.1)
+            assert not proc.wait()
+
+        assert merger.exit_code is not None
+        return merger.exit_code
+
     assert opts.corpus_in
     assert opts.corpus_out
     assert opts.corpus_in.is_dir()
     assert opts.instances >= 1
 
     opts.corpus_out.mkdir(parents=True, exist_ok=True)
+    corpus_syncer = CorpusSyncer(
+        storage, Corpus(opts.corpus_out / "0" / "queue"), opts.project
+    )
+
+    # Memorize the original corpus, so we can exclude it from uploading later
+    original_corpus = {item.name for item in opts.corpus_in.iterdir()}
 
     if opts.max_runtime == 0.0:
         opts.max_runtime = float("inf")
@@ -93,7 +144,7 @@ def nyx_main(
             # check and restart subprocesses
             for idx, proc in enumerate(procs):
                 if proc and proc.poll() is not None:
-                    print(f"afl-fuzz returned early: {proc.wait()}", file=sys.stderr)
+                    LOG.warning("afl-fuzz returned early: %d", proc.wait())
                     procs[idx] = proc = None
                     stats.fields["instances"] -= 1  # type: ignore
 
@@ -168,7 +219,7 @@ def nyx_main(
                 idx = int(log.parent.parent.name)
                 crash_path = log.with_suffix("")
                 log_content = log.read_text()
-                print(f"symbolizing {log} (len={len(log_content)})", file=sys.stderr)
+                LOG.info("symbolizing %s (len=%d)", log, len(log_content))
                 log_content = log_content.replace(
                     "ld_preload_fuzz_no_pt.so",
                     str(opts.sharedir.resolve() / "ld_preload_fuzz_no_pt.so"),
@@ -182,14 +233,12 @@ def nyx_main(
                     text=True,
                 )
                 if sym_result.returncode:
-                    print(
-                        f"asan_symbolize returned {sym_result.returncode}",
-                        file=sys.stderr,
-                    )
-                    print("=" * 20, file=sys.stderr)
+                    LOG.warning("asan_symbolize returned %d", sym_result.returncode)
+                    LOG.warning("=" * 20)
                     if sym_result.stderr.strip():
-                        sys.stderr.write(sym_result.stderr)
-                    print("=" * 20, file=sys.stderr)
+                        for line in sym_result.stderr.splitlines():
+                            LOG.warning(line)
+                    LOG.warning("=" * 20)
                     # silence pylint (possibly-used-before-assignment)
                     symbolized = ""
                 else:
@@ -205,23 +254,21 @@ def nyx_main(
                         )
                     except TraceParsingError as exc:
                         # try again with the error lines omitted
-                        print(
-                            "CrashInfo.fromRawCrashData raised TraceParsingError:",
+                        LOG.warning(
+                            "CrashInfo.fromRawCrashData raised TraceParsingError: %s",
                             exc,
-                            file=sys.stderr,
                         )
-                        print("original crash data", file=sys.stderr)
-                        print("=" * 20, file=sys.stderr)
+                        LOG.warning("original crash data")
+                        LOG.warning("=" * 20)
                         for line_no, line in enumerate(log_lines):
                             if line_no == exc.line_no:
-                                print(f"=> {line} <=", file=sys.stderr)
+                                LOG.warning("=> %s <=", line)
                             else:
-                                print(f"   {line}", file=sys.stderr)
-                        print("=" * 20, file=sys.stderr)
-                        print(
-                            f"Retrying without last {len(log_lines) - exc.line_no} "
-                            "lines",
-                            file=sys.stderr,
+                                LOG.warning("   %s", line)
+                        LOG.warning("=" * 20)
+                        LOG.warning(
+                            "Retrying without last %d lines",
+                            len(log_lines) - exc.line_no,
                         )
                         crash_info = CrashInfo.fromRawCrashData(
                             [],
@@ -233,9 +280,8 @@ def nyx_main(
                     (sigfile, metadata) = collector.search(crash_info)
 
                     if sigfile is not None:
-                        print(
-                            f"Crash matches signature {sigfile}, not submitting...",
-                            file=sys.stderr,
+                        LOG.warning(
+                            "Crash matches signature %s, not submitting...", sigfile
                         )
                     else:
                         collector.generate(
@@ -252,26 +298,18 @@ def nyx_main(
                                 "afl-crash": crash_path.name,
                             },
                         )
-                        print(
-                            'Successfully submitted crash: "'
-                            f"{result['shortSignature']}\" as {result['id']}",
-                            file=sys.stderr,
+                        LOG.info(
+                            'Successfully submitted crash: "%s" as %s',
+                            result["shortSignature"],
+                            result["id"],
                         )
                 elif not sym_result.returncode:
                     log.with_suffix(".log.symbolized").write_text(symbolized)
                 log.rename(log.with_suffix(".log.processed"))
 
             # Only upload new corpus files every 2 hours or after corpus reduction
-            if (
-                opts.s3_queue_upload
-                and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD
-            ):
-                assert s3m is not None
-                s3m.upload_afl_queue_dir(
-                    opts.corpus_out / "0",
-                    opts.sharedir / "config.sh",
-                    include_sync=True,
-                )
+            if opts.queue_upload and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD:
+                corpus_syncer.upload_queue(original_corpus)
                 last_queue_upload = time()
 
             # Calculate stats
@@ -297,24 +335,19 @@ def nyx_main(
                 if proc and proc.poll() is not None:
                     procs[idx] = None
         if any(procs):
-            print(f"need to kill {sum(1 for proc in procs if proc)}", file=sys.stderr)
+            LOG.warning("need to kill %d", sum(1 for proc in procs if proc))
         for proc in procs:
             if proc:
                 proc.kill()
                 try:
                     proc.wait(timeout=1)
                 except TimeoutExpired:
-                    print(
-                        f"Process {proc.pid} did not exit after SIGKILL",
-                        file=sys.stderr,
-                    )
+                    LOG.error("Process %d did not exit after SIGKILL", proc.pid)
 
         log_tee.close()
 
-        if s3m and opts.s3_queue_upload:
-            s3m.upload_afl_queue_dir(
-                opts.corpus_out / "0", opts.sharedir / "config.sh", include_sync=True
-            )
+        if opts.queue_upload:
+            corpus_syncer.upload_queue(original_corpus)
 
         # final stats
         if opts.stats:

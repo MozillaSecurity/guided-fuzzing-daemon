@@ -8,6 +8,7 @@ import re
 import sys
 from argparse import Namespace
 from collections import deque
+from logging import getLogger
 from pathlib import Path
 from queue import Empty, Queue
 from shutil import move, rmtree
@@ -22,7 +23,6 @@ from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import CrashInfo
 
-from .s3 import S3Manager
 from .stats import (
     GeneratedField,
     JoinField,
@@ -32,8 +32,10 @@ from .stats import (
     SumField,
     SumMinMaxField,
 )
+from .storage import CloudStorageProvider, Corpus, CorpusRefreshContext, CorpusSyncer
 from .utils import apply_transform, create_envs, test_binary_asan, warn_local
 
+LOG = getLogger("libfuzzer")
 RE_LIBFUZZER_STATUS = re.compile(
     r"\s*#(\d+)\s+(INITED|NEW|RELOAD|REDUCE|pulse)\s+cov: (\d+)"
 )
@@ -249,7 +251,7 @@ def _extend_unique(lst: list[str], ext: list[str]) -> None:
 
 
 def libfuzzer_main(
-    opts: Namespace, collector: Collector | None, s3m: S3Manager | None
+    opts: Namespace, collector: Collector | None, storage: CloudStorageProvider
 ) -> int:
     assert opts.rargs
     binary = Path(opts.rargs[0])
@@ -314,6 +316,43 @@ def libfuzzer_main(
         if arg not in cmdline:
             cmdline.append(arg)
 
+    devnull: int | None = DEVNULL
+    if opts.debug:
+        devnull = None
+
+    base_env = os.environ.copy()
+    # Set LD_LIBRARY_PATH for convenience
+    if "LD_LIBRARY_PATH" not in base_env:
+        base_env["LD_LIBRARY_PATH"] = str(binary.parent)
+
+    if opts.corpus_refresh:
+        with CorpusRefreshContext(opts, storage) as merger:
+            cmdline.extend(
+                ["-merge=1", str(merger.updated_tests_dir), str(merger.queues_dir)]
+            )
+
+            # Filter out any -dict arguments that we don't need anyway for merging
+            cmdline = [x for x in cmdline if not x.startswith("-dict=")]
+
+            # Filter out any -max_len arguments because the length should only be
+            # enforced by the instance(s) doing the actual testing.
+            cmdline = [x for x in cmdline if not x.startswith("-max_len=")]
+
+            print("Running libFuzzer merge")
+            # pylint: disable=consider-using-with
+            proc = Popen(cmdline, stdout=devnull, env=base_env)
+            last_stats_report = 0.0
+            while proc.poll() is None:
+                # Calculate stats
+                if opts.stats and last_stats_report < time() - 30:
+                    merger.refresh_stats.write_file(opts.stats, [])
+                last_stats_report = time()
+                sleep(0.1)
+            assert not proc.wait()
+
+        assert merger.exit_code is not None
+        return merger.exit_code
+
     args = opts.rargs[1:]
     if args:
         base_cfg.addProgramArguments(args)
@@ -323,20 +362,12 @@ def libfuzzer_main(
         metadata.update(dict(kv.split("=", 1) for kv in opts.metadata))
         base_cfg.addMetadata(metadata)
 
-    base_env = os.environ.copy()
-    # Set LD_LIBRARY_PATH for convenience
-    if "LD_LIBRARY_PATH" not in base_env:
-        base_env["LD_LIBRARY_PATH"] = str(binary.parent)
-
     envs, cfgs = create_envs(base_env, opts, opts.instances, base_cfg)
 
     signature_repeat_count = 0
     last_signature = None
     last_queue_upload = 0
     restarts = opts.libfuzzer_restarts
-
-    # The base directory for libFuzzer is the current working directory
-    base_dir = Path.cwd()
 
     # Find the first corpus directory from our command line
     corpus_dir = None
@@ -382,12 +413,7 @@ def libfuzzer_main(
             print("error: Invalid auto reduce threshold specified.", file=sys.stderr)
             return 2
 
-    # Write a cmdline file, similar to what our AFL fork does
-    with open("cmdline", "w", encoding="utf-8") as cmdline_fd:
-        for rarg in opts.rargs:
-            # Omit any corpus directory that is in the command line
-            if not Path(rarg).is_dir():
-                print(rarg, file=cmdline_fd)
+    corpus_syncer = CorpusSyncer(storage, Corpus(corpus_dir), opts.project)
 
     monitors: list[LibFuzzerMonitor | None] = [None] * opts.instances
     monitor_queue: Queue[int] = Queue()
@@ -493,9 +519,6 @@ def libfuzzer_main(
                 print("Running automated merge...", file=sys.stderr)
                 env = os.environ.copy()
                 env["LD_LIBRARY_PATH"] = str(Path(merge_cmdline[0]).parent)
-                devnull: int | None = DEVNULL
-                if opts.debug:
-                    devnull = None
                 run(merge_cmdline, stdout=devnull, env=env, check=True)
 
                 if not any(new_corpus_dir.iterdir()):
@@ -536,14 +559,10 @@ def libfuzzer_main(
                 stats.update_and_write(opts.stats, monitors, [])
 
             # Only upload new corpus files every 2 hours or after corpus reduction
-            if opts.s3_queue_upload and (
+            if opts.queue_upload and (
                 corpus_reduction_done or last_queue_upload < int(time()) - 7200
             ):
-                assert s3m is not None
-                s3m.upload_libfuzzer_queue_dir(base_dir, corpus_dir, original_corpus)
-
-                # Pull down queue files from other queues directly into the corpus
-                s3m.download_libfuzzer_queues(corpus_dir)
+                corpus_syncer.upload_queue(original_corpus)
 
                 last_queue_upload = int(time())
                 corpus_reduction_done = False
@@ -720,5 +739,8 @@ def libfuzzer_main(
                 # We caught an exception, print it now when all our monitors are
                 # down
                 print_exc()
+
+        if opts.queue_upload:
+            corpus_syncer.upload_queue(original_corpus)
 
     return 0

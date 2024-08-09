@@ -4,7 +4,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from itertools import chain, count, repeat
 from os import chdir
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from subprocess import TimeoutExpired
 
 import pytest
@@ -13,7 +13,7 @@ from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import TraceParsingError
 
 from guided_fuzzing_daemon.nyx import nyx_main
-from guided_fuzzing_daemon.s3 import S3Manager
+from guided_fuzzing_daemon.storage import CloudStorageFile, CloudStorageProvider
 
 
 class NyxMainBreak(Exception):
@@ -41,6 +41,17 @@ def _instance_no(popen_args):
 def nyx_common(mocker, tmp_path):
     """nyx unittest boilerplate"""
 
+    def storage_file_factory(path):
+        file_type = mocker.Mock(spec=CloudStorageFile)
+        file_type.return_value.path = PurePosixPath(path)
+        return file_type()
+
+    def iter_impl(prefix):
+        if "/queues/" in str(prefix):
+            yield storage_file_factory("project/queues/test.bin")
+        else:
+            yield storage_file_factory("project/corpus/test.bin")
+
     class _result:
         aflbindir = tmp_path / "aflbindir"
         args = mocker.Mock()
@@ -48,13 +59,14 @@ def nyx_common(mocker, tmp_path):
         cfg = mocker.patch(
             "guided_fuzzing_daemon.nyx.ProgramConfiguration", autospec=True
         )
-        crash_info = mocker.patch("guided_fuzzing_daemon.nyx.CrashInfo", autospec=True)
         collector = mocker.Mock(spec=Collector)
         corpus_in = tmp_path / "corpus"
         corpus_out = tmp_path / "corpus.out"
+        crash_info = mocker.patch("guided_fuzzing_daemon.nyx.CrashInfo", autospec=True)
         popen = mocker.patch("guided_fuzzing_daemon.nyx.Popen", autospec=True)
         run = mocker.patch("guided_fuzzing_daemon.nyx.run", autospec=True)
-        s3m = mocker.Mock(spec=S3Manager)
+        s3m = mocker.Mock(spec=CloudStorageProvider)
+        s3m.iter.side_effect = iter_impl
         sharedir = tmp_path / "sharedir"
         # set `side_effect=chain(repeat(None, <n>), [NyxMainBreak])` to control how many
         # times the main loop will iterate before breaking
@@ -94,26 +106,34 @@ def nyx_common(mocker, tmp_path):
             binary.touch()
             self.aflbindir.mkdir()
             self.corpus_in.mkdir()
+            (self.corpus_in / "test1.bin").write_text("A")
+            (self.corpus_in / "test2.bin").write_text("B")
 
             self.args.afl_add_corpus = []
             self.args.afl_async_corpus = False
             self.args.afl_hide_logs = False
             self.args.afl_log_pattern = None
             self.args.aflbindir = self.aflbindir
+            self.args.bucket = "bucket"
             self.args.corpus_in = self.corpus_in
-            (self.corpus_in / "test1.bin").write_text("A")
-            (self.corpus_in / "test2.bin").write_text("B")
             self.args.corpus_out = self.corpus_out
+            self.args.corpus_refresh = False
             self.args.env = None
             self.args.env_percent = None
             self.args.instances = 1
             self.args.max_runtime = 0.0
             self.args.metadata = []
             self.args.nyx_log_pattern = None
+            self.args.project = "project"
+            self.args.provider = "test"
+            self.args.queue_upload = False
             self.args.rargs = []
-            self.args.s3_queue_upload = False
             self.args.sharedir = self.sharedir
             self.args.stats = None
+
+        def ret_main(self):
+            chdir(tmp_path)
+            return nyx_main(self.args, self.collector, self.s3m)
 
         def main(self):
             chdir(tmp_path)
@@ -164,17 +184,17 @@ def test_nyx_02(mocker, nyx):
     """nyx queue is uploaded"""
     # setup
     mocker.patch("guided_fuzzing_daemon.nyx.QUEUE_UPLOAD_PERIOD", 90)
+    syncer = mocker.patch("guided_fuzzing_daemon.nyx.CorpusSyncer", autospec=True)
     nyx.sleep.side_effect = chain(repeat(None, 60), [NyxMainBreak, None])
-    nyx.args.s3_queue_upload = True
+    nyx.args.queue_upload = True
 
     # test
     nyx.main()
 
     # check that upload is called once in the loop, once in finally
-    assert nyx.s3m.upload_afl_queue_dir.call_count == 2
-    assert nyx.s3m.upload_afl_queue_dir.call_args == mocker.call(
-        nyx.corpus_out / "0", nyx.sharedir / "config.sh", include_sync=True
-    )
+    assert syncer.call_count == 1
+    assert syncer.call_args[0][1].path == nyx.corpus_out / "0" / "queue"
+    assert syncer.return_value.upload_queue.call_count == 2
 
 
 def test_nyx_03a(nyx):
@@ -199,7 +219,7 @@ def test_nyx_03a(nyx):
     assert popen.wait.call_count == 1
 
 
-def test_nyx_03b(capsys, nyx):
+def test_nyx_03b(caplog, nyx):
     """nyx subprocess are terminated then killed but kill is ignored"""
     nyx.sleep.side_effect = chain(repeat(None, 64), [NyxMainBreak], repeat(None))
 
@@ -216,8 +236,9 @@ def test_nyx_03b(capsys, nyx):
     assert popen.poll.call_count > 0
     assert popen.kill.call_count == 1
     assert popen.wait.call_count == 1
-    stdio = capsys.readouterr()
-    assert "123 did not exit after SIGKILL" in stdio.err
+    assert any(
+        "123 did not exit after SIGKILL" in record.message for record in caplog.records
+    )
 
 
 @pytest.mark.parametrize(
@@ -562,3 +583,45 @@ def test_nyx_11(mocker, nyx, tmp_path):
     main, sec = popen_calls
     assert set(_get_path_args("-F", main.args[0])) == {corpus_add}
     assert set(_get_path_args("-F", sec.args[0])) == set()
+
+
+def test_nyx_refresh_01(mocker, nyx, tmp_path):
+    """nyx corpus refresh without cmin"""
+    # setup
+    mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    nyx.args.corpus_refresh = tmp_path / "refresh"
+
+    # should fail without afl-cmin
+    assert nyx.ret_main() == 2
+
+
+def test_nyx_refresh_02(mocker, nyx, tmp_path):
+    """nyx corpus refresh"""
+    # setup
+    stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    nyx.args.corpus_refresh = tmp_path / "refresh"
+    (nyx.aflbindir / "afl-cmin").touch()
+
+    def fake_run(*_args, **_kwds):
+        (tmp_path / "refresh" / "tests" / "min.bin").touch()
+        return mocker.DEFAULT
+
+    nyx.args.stats = tmp_path / "stats"
+    nyx.popen.side_effect = fake_run
+    nyx.popen.return_value.poll.side_effect = chain(repeat(None, 35), [0])
+    nyx.sleep.side_effect = repeat(None)
+    nyx.popen.return_value.wait.return_value = 0
+
+    # test
+    result = nyx.ret_main()
+
+    # check
+    assert result == 0
+    assert syncer.return_value.method_calls == [
+        mocker.call.download_corpus(),
+        mocker.call.download_queues(),
+        mocker.call.upload_corpus(delete_existing=True),
+    ]
+    assert stats.return_value.write_file.call_count == 2

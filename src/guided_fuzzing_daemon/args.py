@@ -61,11 +61,11 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         " Most of these parameters are typically specified in the global FuzzManager"
         " configuration file.",
     )
-    s3_group = parser.add_argument_group(
-        title="AWS S3 Options",
-        description="Use these arguments for various S3 actions"
-        " and parameters related to operating libFuzzer/AFL within AWS and managing"
-        " build, corpus and progress in S3.",
+    storage_group = parser.add_argument_group(
+        title="Cloud Storage Options",
+        description="Use these arguments for various cloud storage actions and"
+        " parameters related to operating fuzzers in the cloud and managing build,"
+        " corpus and progress in cloud storage.",
     )
 
     fm_or_local_group = main_group.add_mutually_exclusive_group()
@@ -105,9 +105,7 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
     main_group.add_argument(
         "--debug",
         action="store_true",
-        help=(
-            "Shows useful debug information (e.g. disables command output suppression)"
-        ),
+        help="Show useful debug information (e.g. disable command output suppression)",
     )
     main_group.add_argument(
         "--stats",
@@ -129,104 +127,70 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         metavar="COUNT",
     )
 
-    s3_group.add_argument(
-        "--s3-list-projects",
+    storage_group.add_argument(
+        "--list-projects",
         action="store_true",
-        help="List projects in S3 (use --project to filter by prefix)",
+        help="List projects in cloud storage (use --project to filter by prefix)",
     )
-    s3_group.add_argument(
-        "--s3-queue-upload",
+    storage_group.add_argument(
+        "--provider",
+        choices=("S3", "GCS"),
+        default="S3",
+        help="Specify cloud storage provider (S3 or GCS)",
+    )
+    storage_group.add_argument(
+        "--queue-upload",
         action="store_true",
-        help="Use S3 to synchronize queues",
+        help="Use cloud storage to synchronize queues",
     )
-    s3_group.add_argument(
-        "--s3-queue-cleanup",
+    storage_group.add_argument(
+        "--queue-status",
         action="store_true",
-        help="Cleanup S3 closed queues.",
+        help="Display cloud storage queue status",
     )
-    s3_group.add_argument(
-        "--s3-queue-status",
-        action="store_true",
-        help="Display S3 queue status",
-    )
-    s3_group.add_argument(
-        "--s3-build-download",
+    storage_group.add_argument(
+        "--corpus-download",
         type=Path,
-        help="Use S3 to download the build for the specified project",
+        help="Use cloud storage to download the test corpus for the specified project",
         metavar="DIR",
     )
-    s3_group.add_argument(
-        "--s3-build-upload",
-        type=Path,
-        help="Use S3 to upload a new build for the specified project",
-        metavar="FILE",
-    )
-    s3_group.add_argument(
-        "--s3-corpus-download",
-        type=Path,
-        help="Use S3 to download the test corpus for the specified project",
-        metavar="DIR",
-    )
-    s3_group.add_argument(
-        "--s3-corpus-download-size",
+    storage_group.add_argument(
+        "--corpus-download-size",
         type=int,
         help="When downloading the corpus, select only SIZE files randomly",
         metavar="SIZE",
     )
-    s3_group.add_argument(
-        "--s3-corpus-upload",
+    storage_group.add_argument(
+        "--corpus-upload",
         type=Path,
-        help="Use S3 to upload a test corpus for the specified project",
+        help="Use cloud storage to upload a test corpus for the specified project",
         metavar="DIR",
     )
-    s3_group.add_argument(
-        "--s3-corpus-replace",
+    storage_group.add_argument(
+        "--corpus-replace",
         action="store_true",
-        help=(
-            "In conjunction with --s3-corpus-upload, deletes all other remote test "
-            "files"
-        ),
+        help="In conjunction with --corpus-upload, deletes all other remote test files",
     )
-    s3_group.add_argument(
-        "--s3-corpus-refresh",
+    storage_group.add_argument(
+        "--corpus-refresh",
         type=Path,
-        help=(
-            "Download queues and corpus from S3, combine and minimize, then re-upload."
-        ),
+        help="Download queues and corpus from cloud storage, combine and minimize, then"
+        " re-upload.",
         metavar="DIR",
     )
-    s3_group.add_argument(
-        "--s3-corpus-status",
+    storage_group.add_argument(
+        "--corpus-status",
         action="store_true",
-        help="Display S3 corpus status",
+        help="Display cloud storage corpus status",
     )
-    s3_group.add_argument(
-        "--s3-bucket",
-        help="Name of the S3 bucket to use",
+    storage_group.add_argument(
+        "--bucket",
+        help="Name of the cloud storage bucket to use",
         metavar="NAME",
     )
-    s3_group.add_argument(
+    storage_group.add_argument(
         "--project",
-        help="Name of the subfolder/project inside the S3 bucket",
-        metavar="NAME",
-    )
-    s3_group.add_argument(
-        "--build",
-        type=Path,
-        help=(
-            "Local build directory to use during corpus refresh instead of downloading."
-        ),
-        metavar="DIR",
-    )
-    s3_group.add_argument(
-        "--build-project",
-        help="If specified, this overrides --project for fetching the build from S3.",
-        metavar="NAME",
-    )
-    s3_group.add_argument(
-        "--build-zip-name",
-        default="build.zip",
-        help="Override default build.zip name when working with S3 builds.",
+        help="Name of the subfolder/project inside the cloud storage bucket",
         metavar="NAME",
     )
 
@@ -440,22 +404,24 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
     if opts.transform and not opts.transform.is_file():
         parser.error(f"Failed to locate transformation script {opts.transform}")
 
-    s3_main = (
-        opts.s3_build_download
-        or opts.s3_build_upload
-        or opts.s3_corpus_download
-        or opts.s3_corpus_refresh
-        or opts.s3_corpus_status
-        or opts.s3_corpus_upload
-        or opts.s3_list_projects
-        or opts.s3_queue_cleanup
-        or opts.s3_queue_status
+    storage_main = (
+        opts.corpus_download
+        or opts.corpus_status
+        or opts.corpus_upload
+        or opts.list_projects
+        or opts.queue_status
     )
-    if opts.s3_queue_upload or (s3_main and not opts.s3_list_projects):
-        if not opts.s3_bucket or not opts.project:
-            parser.error("Must specify both --s3-bucket and --project for S3 actions")
-    elif opts.s3_list_projects and not opts.s3_bucket:
-        parser.error("Must specify --s3-bucket for S3 list projects action")
+    if (
+        opts.queue_upload
+        or opts.corpus_refresh
+        or (storage_main and not opts.list_projects)
+    ):
+        if not opts.bucket or not opts.project:
+            parser.error(
+                "Must specify both --bucket and --project for cloud storage actions"
+            )
+    elif opts.list_projects and not opts.bucket:
+        parser.error("Must specify --bucket for cloud storage list projects action")
 
     if opts.env:
         result = {}
@@ -504,7 +470,7 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
     if opts.mode in {"afl", "nyx"}:
         if not opts.aflbindir:
             parser.error("Must specify --afl-binary-dir for AFL/Nyx mode")
-        if not opts.s3_corpus_refresh:
+        if not opts.corpus_refresh:
             if not opts.corpus_in or not opts.corpus_in.is_dir():
                 parser.error("Must specify --corpus-in with --afl/--nyx")
             if not opts.corpus_out:
@@ -525,9 +491,8 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         if opts.max_runtime < 0:
             parser.error("--max-runtime must be positive (or 0 to disable).")
 
-    if opts.mode == "libfuzzer" and not s3_main:
-        if not opts.rargs:
-            parser.error("No arguments specified")
+    if opts.mode == "libfuzzer" and not opts.rargs:
+        parser.error("No arguments specified")
 
     if opts.libfuzzer_auto_reduce is not None:
         if opts.libfuzzer_auto_reduce < 5:
