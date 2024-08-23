@@ -6,8 +6,6 @@ from __future__ import annotations
 import hashlib
 from abc import ABC, abstractmethod
 from argparse import Namespace
-from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from logging import getLogger
@@ -23,42 +21,9 @@ import botocore
 from google.cloud import storage as gcp_storage
 
 from .stats import GeneratedField, StatAggregator
+from .utils import Executor
 
 LOG = getLogger("gfd.storage")
-THREAD_WORKERS = 16
-
-
-@contextmanager
-def Executor() -> Iterator[ThreadPoolExecutor]:  # pylint: disable=invalid-name
-    """ThreadPoolExecutor that cancels remaining tasks if an exception is raised"""
-    jobs: list[Future[None]] = []
-
-    def _check_jobs(final: bool = False) -> None:
-        result = wait(jobs, return_when=FIRST_EXCEPTION, timeout=None if final else 0)
-        for job in result.done:
-            try:
-                job.result()  # raises, if the job raised
-            except:  # noqa pylint: disable=bare-except
-                for job in result.not_done:
-                    job.cancel()
-                raise
-
-    class _Executor(ThreadPoolExecutor):
-
-        # the typing for this is almost impossible until 3.10
-        # see `typing.ParamSpec`
-        # pylint: disable=arguments-differ
-        def submit(self, fn, *args, **kwds):  # type: ignore
-            job = super().submit(fn, *args, **kwds)
-            jobs.append(job)
-            _check_jobs()
-            return job
-
-    with _Executor(max_workers=THREAD_WORKERS) as executor:
-        try:
-            yield executor
-        finally:
-            _check_jobs(final=True)
 
 
 @dataclass
@@ -219,9 +184,9 @@ class S3File(CloudStorageFile):
                 Bucket=self._provider.bucket_name, Key=str(self.path)
             )
         except botocore.exceptions.ClientError as exc:
-            if exc.response["Error"]["Code"] == 404:
+            if exc.response["Error"]["Code"] == "404":
                 return False
-            raise
+            raise  # pragma: no cover
         return True
 
 
@@ -340,7 +305,7 @@ class GoogleCloudStorage(CloudStorageProvider):
         blobs = self.bucket.list_blobs(prefix=prefix, delimiter="/")
         # must consume iterator to get the response
         for _ in blobs:
-            pass
+            pass  # pragma: no cover
         for result in blobs.prefixes:
             yield result[:-1]  # trim trailing delimiter
 
@@ -412,7 +377,7 @@ class CorpusSyncer:
         # delete files that no longer exist in the local corpus
         if delete_existing:
             deleted = len(existing)
-            self.provider.delete(existing.values())
+            self.provider.delete(tuple(existing.values()))
             LOG.info(
                 "upload_corpus() -> before=%d, new=%d, deleted=%d, after=%d (%.03fs)",
                 old_corpus_size,
@@ -484,8 +449,9 @@ class CorpusSyncer:
                 out_path = self.corpus.path / file.path.name
                 if out_path.exists():
                     dupes += 1
-                executor.submit(file.download_to_file, out_path)
-                downloaded += 1
+                else:
+                    executor.submit(file.download_to_file, out_path)
+                    downloaded += 1
         LOG.info(
             "download_queues() -> downloaded=%d, skipped=%d (%.03fs)",
             downloaded,
@@ -577,20 +543,5 @@ class CorpusRefreshContext:
         )
         corpus_uploader.upload_corpus(delete_existing=True)
         corpus_uploader.delete_queues()
-
-        # Prune the queues directory once we successfully uploaded the new
-        # test corpus, but leave everything that's part of our new corpus
-        # so we don't have to download those files again.
-        test_files = {
-            file.name for file in self.updated_tests_dir.iterdir() if file.is_file()
-        }
-        obsolete_queue_files = [
-            file.name
-            for file in self.queues_dir.iterdir()
-            if file.is_file() and file.name not in test_files
-        ]
-
-        for file in obsolete_queue_files:
-            (self.queues_dir / file).unlink()
 
         self.exit_code = 0

@@ -9,13 +9,17 @@ import tempfile
 import time
 import zipfile
 from argparse import Namespace
+from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from copy import copy
 from math import log10
 from pathlib import Path
 from random import uniform
-from typing import TextIO
+from typing import Iterator, TextIO
 
 from FTB.ProgramConfiguration import ProgramConfiguration
+
+THREAD_WORKERS = 16
 
 
 def apply_transform(script_path: Path, testcase_path: Path) -> Path:
@@ -135,6 +139,39 @@ def warn_local(opts: Namespace) -> None:
             file=sys.stderr,
         )
         time.sleep(2)
+
+
+@contextmanager
+def Executor() -> Iterator[ThreadPoolExecutor]:  # pylint: disable=invalid-name
+    """ThreadPoolExecutor that cancels remaining tasks if an exception is raised"""
+    jobs: list[Future[None]] = []
+
+    def _check_jobs(final: bool = False) -> None:
+        result = wait(jobs, return_when=FIRST_EXCEPTION, timeout=None if final else 0)
+        for job in result.done:
+            try:
+                job.result()  # raises, if the job raised
+            except:  # noqa pylint: disable=bare-except
+                for job in result.not_done:
+                    job.cancel()
+                raise
+
+    class _Executor(ThreadPoolExecutor):
+
+        # the typing for this is almost impossible until 3.10
+        # see `typing.ParamSpec`
+        # pylint: disable=arguments-differ
+        def submit(self, fn, *args, **kwds):  # type: ignore
+            job = super().submit(fn, *args, **kwds)
+            jobs.append(job)
+            _check_jobs()
+            return job
+
+    with _Executor(max_workers=THREAD_WORKERS) as executor:
+        try:
+            yield executor
+        finally:
+            _check_jobs(final=True)
 
 
 class LogFile:
