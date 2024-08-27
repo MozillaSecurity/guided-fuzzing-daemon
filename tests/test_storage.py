@@ -6,6 +6,7 @@
 import io
 from argparse import Namespace
 from datetime import datetime
+from itertools import islice
 from pathlib import PurePosixPath
 
 import pytest
@@ -26,6 +27,16 @@ from guided_fuzzing_daemon.storage import (
 
 class _TestExc(Exception):
     pass
+
+
+# added to itertools in 3.12
+def batched(iterable, n):
+    # batched('ABCDEFG', 3) → ABC DEF G
+    if n < 1:
+        raise ValueError("n must be at least one")
+    iterator = iter(iterable)
+    while batch := tuple(islice(iterator, n)):
+        yield batch
 
 
 @pytest.fixture(autouse=True)
@@ -724,23 +735,28 @@ def test_syncer_03(delete_existing, mocker, tmp_path):
     storage.iter.side_effect = [(f1, f2)]
     syncer = CorpusSyncer(storage, corpus, "t_proj")
     syncer.upload_corpus(delete_existing=delete_existing)
+    assert storage.mock_calls.pop(0) == mocker.call.iter(PurePosixPath("t_proj/corpus"))
     if delete_existing:
-        assert storage.mock_calls == [
-            mocker.call.iter(PurePosixPath("t_proj/corpus")),
-            mocker.call.__getitem__(PurePosixPath("t_proj/corpus/63")),
-            mocker.call.__getitem__().upload_from_file(l3),
-            mocker.call.__getitem__(PurePosixPath("t_proj/corpus/64")),
-            mocker.call.__getitem__().upload_from_file(l4),
-            mocker.call.delete((f1,)),
-        ]
-    else:
-        assert storage.mock_calls == [
-            mocker.call.iter(PurePosixPath("t_proj/corpus")),
-            mocker.call.__getitem__(PurePosixPath("t_proj/corpus/63")),
-            mocker.call.__getitem__().upload_from_file(l3),
-            mocker.call.__getitem__(PurePosixPath("t_proj/corpus/64")),
-            mocker.call.__getitem__().upload_from_file(l4),
-        ]
+        assert storage.mock_calls.pop() == mocker.call.delete((f1,))
+
+    expected_paths = {
+        PurePosixPath("t_proj/corpus/63"): l3,
+        PurePosixPath("t_proj/corpus/64"): l4,
+    }
+
+    # after `iter`/`delete`, there should be an even number of calls:
+    # - get the remote object by path
+    # - upload from the corresponding local path
+    assert len(storage.mock_calls) % 2 == 0
+    # batched will return the calls in chunks of 2
+    for item_call, upload_call in batched(storage.mock_calls, 2):
+        remote_path = item_call.args[0]
+        assert remote_path in expected_paths
+        local_path = expected_paths.pop(remote_path)
+        assert item_call == mocker.call.__getitem__(remote_path)
+        assert upload_call == mocker.call.__getitem__().upload_from_file(local_path)
+    # all should have been consumed
+    assert not expected_paths
 
 
 @pytest.mark.parametrize("skip_hashes", ([], ["64"]))
@@ -762,20 +778,29 @@ def test_syncer_04(mocker, skip_hashes, tmp_path):
     storage.iter.side_effect = [(f1,)]
     syncer = CorpusSyncer(storage, corpus, "t_proj")
     syncer.upload_queue(skip_hashes=skip_hashes)
-    l4_calls = []
+    expected_paths = {
+        PurePosixPath(f"t_proj/queues/{corpus.uuid}/62"): l2,
+        PurePosixPath(f"t_proj/queues/{corpus.uuid}/63"): l3,
+    }
     if not skip_hashes:
-        l4_calls = [
-            mocker.call.__getitem__(PurePosixPath(f"t_proj/queues/{corpus.uuid}/64")),
-            mocker.call.__getitem__().upload_from_file(l4),
-        ]
-    assert storage.mock_calls == [
-        mocker.call.iter(PurePosixPath("t_proj/queues") / corpus.uuid),
-        mocker.call.__getitem__(PurePosixPath(f"t_proj/queues/{corpus.uuid}/62")),
-        mocker.call.__getitem__().upload_from_file(l2),
-        mocker.call.__getitem__(PurePosixPath(f"t_proj/queues/{corpus.uuid}/63")),
-        mocker.call.__getitem__().upload_from_file(l3),
-        *l4_calls,
-    ]
+        expected_paths[PurePosixPath(f"t_proj/queues/{corpus.uuid}/64")] = l4
+
+    assert storage.mock_calls.pop(0) == mocker.call.iter(
+        PurePosixPath("t_proj/queues") / corpus.uuid
+    )
+    # after `iter`, there should be an even number of calls:
+    # - get the remote object by path
+    # - upload from the corresponding local path
+    assert len(storage.mock_calls) % 2 == 0
+    # batched will return the calls in chunks of 2
+    for item_call, upload_call in batched(storage.mock_calls, 2):
+        remote_path = item_call.args[0]
+        assert remote_path in expected_paths
+        local_path = expected_paths.pop(remote_path)
+        assert item_call == mocker.call.__getitem__(remote_path)
+        assert upload_call == mocker.call.__getitem__().upload_from_file(local_path)
+    # all should have been consumed
+    assert not expected_paths
 
 
 def test_syncer_05(mocker, tmp_path):
