@@ -18,12 +18,18 @@ from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import CrashInfo, TraceParsingError
 
 from .afl import POWER_SCHEDS, AFLStats
-from .storage import CloudStorageProvider, Corpus, CorpusRefreshContext, CorpusSyncer
+from .stats import STATS_UPLOAD_PERIOD
+from .storage import (
+    QUEUE_UPLOAD_PERIOD,
+    CloudStorageProvider,
+    Corpus,
+    CorpusRefreshContext,
+    CorpusSyncer,
+)
 from .utils import LogTee, create_envs, warn_local
 
 ASAN_SYMBOLIZE = which("asan_symbolize")
 LOG = getLogger("gfd.nyx")
-QUEUE_UPLOAD_PERIOD = 7200
 
 
 def nyx_main(
@@ -68,7 +74,7 @@ def nyx_main(
             assert proc is not None
             while proc.poll() is None:
                 # Calculate stats
-                if opts.stats and last_stats_report < time() - 30:
+                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
                     merger.refresh_stats.write_file(opts.stats, [])
                     last_stats_report = time()
                 sleep(0.1)
@@ -313,7 +319,7 @@ def nyx_main(
                 last_queue_upload = time()
 
             # Calculate stats
-            if opts.stats and last_stats_report < time() - 30:
+            if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
                 stats.update_and_write(
                     opts.stats,
                     [path.parent for path in opts.corpus_out.glob("*/fuzzer_stats")],

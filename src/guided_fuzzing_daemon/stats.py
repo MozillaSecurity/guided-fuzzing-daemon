@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover
     HAVE_GETLOADAVG = False
 
 CPU_POLL_INTERVAL = 1
+STATS_UPLOAD_PERIOD = 30
 
 
 class Field(ABC):

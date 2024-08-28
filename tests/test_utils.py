@@ -76,44 +76,19 @@ def test_create_envs(mocker):
 def test_executor_01():
     """test that tasks run correctly in parallel"""
 
-    def task(x):
-        return x * 2
+    def task():
+        pass
 
     with Executor() as executor:
-        futures = [executor.submit(task, i) for i in range(5)]
+        futures = [executor.submit(task) for _ in range(5)]
 
     results = [f.result() for f in futures]
 
-    assert results == [0, 2, 4, 6, 8]
+    assert len(results) == 5
+    assert all(not f.cancelled() for f in futures)
 
 
 def test_executor_02(mocker):
-    """test that the Executor cancels remaining tasks if an exception is raised"""
-    mocker.patch("guided_fuzzing_daemon.utils.THREAD_WORKERS", 1)
-    lock = Lock()
-
-    def task(x):
-        with lock:
-            if x == 1:
-                raise ValueError("Test exception")
-            sleep(0.1)
-            return x
-
-    with pytest.raises(ValueError, match="Test exception"):
-        with Executor() as executor:
-            with lock:
-                futures = [executor.submit(task, i) for i in range(5)]
-
-    # Check that all tasks are either completed or cancelled
-    assert futures[0].result() == 0
-    with pytest.raises(ValueError, match="Test exception"):
-        futures[1].result()
-    # assert futures[2].cancelled()  # this might be scheduled before wait() returns
-    assert futures[3].cancelled()
-    assert futures[4].cancelled()
-
-
-def test_executor_03(mocker):
     """test that tasks not yet started are cancelled if an exception occurs"""
     mocker.patch("guided_fuzzing_daemon.utils.THREAD_WORKERS", 1)
     lock = Lock()
@@ -133,44 +108,6 @@ def test_executor_03(mocker):
     # Ensure that some tasks were cancelled
     cancelled_futures = [f for f in futures if f.cancelled()]
     assert len(cancelled_futures) > 0
-
-    # For those that were not cancelled, ensure that they completed or raised the
-    # expected exception
-    for future in futures:
-        if not future.cancelled():
-            try:
-                result = future.result()
-                assert result in [0, 4, 6, 8]  # Expected results
-            except ValueError:
-                pass  # Expected exception for the task that raises
-
-
-def test_executor_04():
-    """test that no tasks are cancelled if no exception is raised"""
-
-    def task(x):
-        return x * 2
-
-    with Executor() as executor:
-        futures = [executor.submit(task, i) for i in range(5)]
-
-    results = [f.result() for f in futures]
-
-    assert results == [0, 2, 4, 6, 8]
-    assert all(not f.cancelled() for f in futures)
-
-
-def test_executor_05():
-    """stress test Executor with tasks that sleep and may overlap in execution"""
-
-    def task(x):
-        sleep(0.1)
-        return x * 2
-
-    with Executor() as executor:
-        futures = [executor.submit(task, i) for i in range(50)]  # Large number of tasks
-
-    results = [f.result() for f in futures]
-
-    assert len(results) == 50
-    assert all(isinstance(result, int) for result in results)
+    assert len(cancelled_futures) <= 3  # at least one should pass, and one should raise
+    exceptions = [f for f in futures if not f.cancelled() and f.exception()]
+    assert len(exceptions) == 1

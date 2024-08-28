@@ -105,7 +105,7 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
     main_group.add_argument(
         "--debug",
         action="store_true",
-        help="Show useful debug information (e.g. disable command output suppression)",
+        help="Show debug information (e.g. disable command output suppression)",
     )
     main_group.add_argument(
         "--stats",
