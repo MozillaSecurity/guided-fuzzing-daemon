@@ -24,6 +24,7 @@ from .stats import GeneratedField, StatAggregator
 from .utils import Executor
 
 LOG = getLogger("gfd.storage")
+QUEUE_UPLOAD_PERIOD = 7200
 
 
 @dataclass

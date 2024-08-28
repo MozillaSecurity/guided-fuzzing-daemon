@@ -19,6 +19,7 @@ from FTB.Running.AutoRunner import AutoRunner
 from FTB.Signatures.CrashInfo import CrashInfo
 
 from .stats import (
+    STATS_UPLOAD_PERIOD,
     GeneratedField,
     MaxTimeField,
     MeanField,
@@ -28,12 +29,17 @@ from .stats import (
     SumMinMaxField,
     ValueCounterField,
 )
-from .storage import CloudStorageProvider, Corpus, CorpusRefreshContext, CorpusSyncer
+from .storage import (
+    QUEUE_UPLOAD_PERIOD,
+    CloudStorageProvider,
+    Corpus,
+    CorpusRefreshContext,
+    CorpusSyncer,
+)
 from .utils import LogTee, create_envs, warn_local
 
 LOG = getLogger("gfd.afl")
 POWER_SCHEDS = ("explore", "coe", "lin", "quad", "exploit", "rare")
-QUEUE_UPLOAD_PERIOD = 7200
 
 
 class AFLStats(StatAggregator):
@@ -165,7 +171,7 @@ def afl_main(
             assert proc is not None
             while proc.poll() is None:
                 # Calculate stats
-                if opts.stats and last_stats_report < time() - 30:
+                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
                     merger.refresh_stats.write_file(opts.stats, [])
                     last_stats_report = time()
                 sleep(0.1)
@@ -361,7 +367,7 @@ def afl_main(
                 last_queue_upload = time()
 
             # Calculate stats
-            if opts.stats and last_stats_report < time() - 30:
+            if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
                 stats.update_and_write(
                     opts.stats,
                     [path.parent for path in opts.corpus_out.glob("*/fuzzer_stats")],

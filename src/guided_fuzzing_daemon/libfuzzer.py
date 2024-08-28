@@ -24,6 +24,7 @@ from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import CrashInfo
 
 from .stats import (
+    STATS_UPLOAD_PERIOD,
     GeneratedField,
     JoinField,
     MaxTimeField,
@@ -32,7 +33,13 @@ from .stats import (
     SumField,
     SumMinMaxField,
 )
-from .storage import CloudStorageProvider, Corpus, CorpusRefreshContext, CorpusSyncer
+from .storage import (
+    QUEUE_UPLOAD_PERIOD,
+    CloudStorageProvider,
+    Corpus,
+    CorpusRefreshContext,
+    CorpusSyncer,
+)
 from .utils import apply_transform, create_envs, test_binary_asan, warn_local
 
 LOG = getLogger("libfuzzer")
@@ -344,7 +351,7 @@ def libfuzzer_main(
             last_stats_report = 0.0
             while proc.poll() is None:
                 # Calculate stats
-                if opts.stats and last_stats_report < time() - 30:
+                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
                     merger.refresh_stats.write_file(opts.stats, [])
                 last_stats_report = time()
                 sleep(0.1)
@@ -560,7 +567,8 @@ def libfuzzer_main(
 
             # Only upload new corpus files every 2 hours or after corpus reduction
             if opts.queue_upload and (
-                corpus_reduction_done or last_queue_upload < int(time()) - 7200
+                corpus_reduction_done
+                or last_queue_upload < int(time()) - QUEUE_UPLOAD_PERIOD
             ):
                 corpus_syncer.upload_queue(original_corpus)
 

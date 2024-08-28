@@ -152,9 +152,11 @@ def Executor() -> Iterator[ThreadPoolExecutor]:  # pylint: disable=invalid-name
             try:
                 job.result()  # raises, if the job raised
             except:  # noqa pylint: disable=bare-except
-                for job in result.not_done:
-                    job.cancel()
-                raise
+                try:
+                    for job in result.not_done:
+                        job.cancel()
+                finally:
+                    raise
 
     class _Executor(ThreadPoolExecutor):
 
