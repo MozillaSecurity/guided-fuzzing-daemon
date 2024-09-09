@@ -2,6 +2,7 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+import sys
 from collections import OrderedDict
 from threading import Lock
 from time import sleep
@@ -71,6 +72,18 @@ def test_create_envs(mocker):
     assert cfgs[2].addEnvironmentVariables.call_args_list == [
         mocker.call({"var2": "val2c", "var3": "val3"})
     ]
+
+
+@pytest.mark.skipif(sys.version_info[:2] >= (3, 12), reason="batched in stdlib 3.12+")
+def test_batched():
+    """test for batched"""
+    # pylint: disable=import-outside-toplevel
+    from guided_fuzzing_daemon.utils import batched
+
+    with pytest.raises(ValueError):
+        list(batched(range(10), 0))
+    assert list(batched(range(10), 2)) == [(0, 1), (2, 3), (4, 5), (6, 7), (8, 9)]
+    assert list(batched(range(5), 2)) == [(0, 1), (2, 3), (4,)]
 
 
 def test_executor_01():

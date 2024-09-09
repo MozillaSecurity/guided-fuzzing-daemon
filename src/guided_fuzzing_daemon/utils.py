@@ -15,9 +15,12 @@ from copy import copy
 from math import log10
 from pathlib import Path
 from random import uniform
-from typing import Iterator, TextIO
+from typing import Iterable, Iterator, TextIO, TypeVar
 
 from FTB.ProgramConfiguration import ProgramConfiguration
+
+if sys.version_info[:2] < (3, 12):
+    from itertools import islice
 
 THREAD_WORKERS = 16
 
@@ -55,6 +58,20 @@ def apply_transform(script_path: Path, testcase_path: Path) -> Path:
                 archive.write(str(file), arcname=file.relative_to(output_path))
 
     return Path(archive_path)
+
+
+if sys.version_info[:2] < (3, 12):
+    # generic type for `batched` below
+    _T = TypeVar("_T")
+
+    # added to itertools in 3.12
+    def batched(iterable: Iterable[_T], n: int) -> Iterator[tuple[_T, ...]]:
+        # batched('ABCDEFG', 3) → ABC DEF G
+        if n < 1:
+            raise ValueError("n must be at least one")
+        iterator = iter(iterable)
+        while batch := tuple(islice(iterator, n)):
+            yield batch
 
 
 def create_envs(

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from abc import ABC, abstractmethod
 from argparse import Namespace
 from dataclasses import dataclass
@@ -22,6 +23,11 @@ from google.cloud import storage as gcp_storage
 
 from .stats import GeneratedField, StatAggregator
 from .utils import Executor
+
+if sys.version_info[:2] < (3, 12):
+    from .utils import batched
+else:
+    from itertools import batched
 
 LOG = getLogger("gfd.storage")
 QUEUE_UPLOAD_PERIOD = 7200
@@ -211,13 +217,12 @@ class S3Storage(CloudStorageProvider):
         with Executor() as executor:
             # The S3 rate limit for DELETE is 3500/s, so use a factor of that.
             # The max allowed delete size is 1000.
-            while keys:
+            for del_keys in batched(keys, 500):
                 executor.submit(
                     self.client.delete_objects,
                     Bucket=self.bucket_name,
-                    Delete={"Objects": keys[:500], "Quiet": True},
+                    Delete={"Objects": del_keys, "Quiet": True},
                 )
-                keys = keys[500:]
 
     def iter(self, prefix: PurePosixPath) -> Iterable[CloudStorageFile]:
         result = self.client.list_objects_v2(
@@ -302,9 +307,8 @@ class GoogleCloudStorage(CloudStorageProvider):
             assert file._provider is self  # pylint: disable=protected-access
             file_list.append(str(file.path))
         with Executor() as executor:
-            while file_list:
-                executor.submit(self.bucket.delete_blobs, file_list[:100])
-                file_list = file_list[100:]
+            for del_files in batched(file_list, 100):
+                executor.submit(self.bucket.delete_blobs, del_files)
 
     def iter(self, prefix: PurePosixPath) -> Iterator[CloudStorageFile]:
         for blob in self.bucket.list_blobs(prefix=f"{prefix}/"):

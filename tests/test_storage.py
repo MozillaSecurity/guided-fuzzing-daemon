@@ -4,9 +4,9 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import io
+import sys
 from argparse import Namespace
 from datetime import datetime
-from itertools import islice
 from pathlib import PurePosixPath
 
 import pytest
@@ -24,19 +24,14 @@ from guided_fuzzing_daemon.storage import (
     S3Storage,
 )
 
+if sys.version_info[:2] < (3, 12):
+    from guided_fuzzing_daemon.utils import batched
+else:
+    from itertools import batched
+
 
 class _TestExc(Exception):
     pass
-
-
-# added to itertools in 3.12
-def batched(iterable, n):
-    # batched('ABCDEFG', 3) → ABC DEF G
-    if n < 1:
-        raise ValueError("n must be at least one")
-    iterator = iter(iterable)
-    while batch := tuple(islice(iterator, n)):
-        yield batch
 
 
 @pytest.fixture(autouse=True)
@@ -591,7 +586,7 @@ def test_s3storage_01(s3storage, stubber):
         {
             "Bucket": "test-bucket",
             "Delete": {
-                "Objects": [{"Key": "test_file1.txt"}, {"Key": "test_file2.txt"}],
+                "Objects": ({"Key": "test_file1.txt"}, {"Key": "test_file2.txt"}),
                 "Quiet": True,
             },
         },
