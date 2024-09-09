@@ -209,13 +209,15 @@ class S3Storage(CloudStorageProvider):
             assert file._provider is self  # pylint: disable=protected-access
             keys.append({"Key": str(file.path)})
         with Executor() as executor:
+            # The S3 rate limit for DELETE is 3500/s, so use a factor of that.
+            # The max allowed delete size is 1000.
             while keys:
                 executor.submit(
                     self.client.delete_objects,
                     Bucket=self.bucket_name,
-                    Delete={"Objects": keys[:1000], "Quiet": True},
+                    Delete={"Objects": keys[:500], "Quiet": True},
                 )
-                keys = keys[1000:]
+                keys = keys[500:]
 
     def iter(self, prefix: PurePosixPath) -> Iterable[CloudStorageFile]:
         result = self.client.list_objects_v2(
