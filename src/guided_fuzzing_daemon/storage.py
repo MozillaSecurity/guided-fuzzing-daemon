@@ -194,7 +194,13 @@ class S3File(CloudStorageFile):
 class S3Storage(CloudStorageProvider):
     def __init__(self, bucket_name: str) -> None:
         super().__init__(bucket_name)
-        self.client = boto3.client("s3")
+        config = botocore.config.Config(
+            retries={
+                "max_attempts": 10,
+                "mode": "standard",
+            }
+        )
+        self.client = boto3.client("s3", config=config)
 
     def delete(self, files: Iterable[CloudStorageFile]) -> None:
         keys = []
