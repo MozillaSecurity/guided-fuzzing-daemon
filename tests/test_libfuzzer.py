@@ -142,43 +142,66 @@ def test_libfuzzer_04(libf, mocker):
     assert libf.writer.call_count > 0
 
 
-def test_libfuzzer_05(caplog, libf, tmp_path):
+def test_libfuzzer_05a(caplog, libf, tmp_path):
     """negative arg tests"""
     libf.queue.return_value.get.side_effect = chain([0], repeat(Empty))
     (tmp_path / "firefox").unlink()
-    binary, corpus = map(Path, libf.args.rargs)
     libf.args.rargs.pop()
 
     assert libf.ret_main() == 2
     assert any("binary does not exist" in record.message for record in caplog.records)
-    binary.touch()
+
+
+def test_libfuzzer_05b(caplog, libf):
+    """negative arg tests"""
+    libf.queue.return_value.get.side_effect = chain([0], repeat(Empty))
+    libf.args.rargs.pop()
 
     assert libf.ret_main() == 2
     assert any("corpus directory" in record.message for record in caplog.records)
-    libf.args.rargs.append(str(corpus))
 
+
+def test_libfuzzer_05c(caplog, libf):
+    """negative arg tests"""
+    libf.queue.return_value.get.side_effect = chain([0], repeat(Empty))
     libf.args.rargs.append("-jobs=")
-    assert libf.ret_main() == 2
-    assert any(
-        "-jobs and -workers is incompatible" in record.message
-        for record in caplog.records
-    )
-    libf.args.rargs[-1] = "-workers="
-    assert libf.ret_main() == 2
-    assert any(
-        "-jobs and -workers is incompatible" in record.message
-        for record in caplog.records
-    )
-    libf.args.rargs.pop()
 
+    assert libf.ret_main() == 2
+    assert any(
+        "-jobs and -workers is incompatible" in record.message
+        for record in caplog.records
+    )
+
+
+def test_libfuzzer_05d(caplog, libf):
+    """negative arg tests"""
+    libf.queue.return_value.get.side_effect = chain([0], repeat(Empty))
+    libf.args.rargs.append("-workers=")
+
+    assert libf.ret_main() == 2
+    assert any(
+        "-jobs and -workers is incompatible" in record.message
+        for record in caplog.records
+    )
+
+
+def test_libfuzzer_05e(caplog, libf):
+    """negative arg tests"""
+    libf.queue.return_value.get.side_effect = chain([0], repeat(Empty))
     libf.asan_test.return_value = False
+
     assert libf.ret_main() == 2
     assert any(
         "binaries built with AddressSanitizer" in record.message
         for record in caplog.records
     )
 
+
+def test_libfuzzer_05f(caplog, libf):
+    """negative arg tests"""
+    libf.queue.return_value.get.side_effect = chain([0], repeat(Empty))
     libf.cfg.fromBinary.return_value = None
+
     assert libf.ret_main() == 2
     assert any(
         "load program configuration" in record.message for record in caplog.records
