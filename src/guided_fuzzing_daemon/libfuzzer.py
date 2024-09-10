@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 from argparse import Namespace
 from collections import deque
 from logging import getLogger
@@ -16,7 +15,6 @@ from subprocess import DEVNULL, PIPE, Popen, run
 from tempfile import mkdtemp
 from threading import Thread
 from time import sleep, time
-from traceback import print_exc
 from typing import cast
 
 from Collector.Collector import Collector
@@ -42,7 +40,7 @@ from .storage import (
 )
 from .utils import apply_transform, create_envs, test_binary_asan, warn_local
 
-LOG = getLogger("libfuzzer")
+LOG = getLogger("gfd.libfuzzer")
 RE_LIBFUZZER_STATUS = re.compile(
     r"\s*#(\d+)\s+(INITED|NEW|RELOAD|REDUCE|pulse)\s+cov: (\d+)"
 )
@@ -161,9 +159,9 @@ class LibFuzzerMonitor(Thread):
 
                 # Pass-through output
                 if self.mid is not None:
-                    sys.stderr.write(f"[Job {self.mid}] {line}")
+                    LOG.info("[Job %d] %s", self.mid, line)
                 else:
-                    sys.stderr.write(line)
+                    LOG.info("%s", line)
 
             self.process_stderr.close()
 
@@ -191,7 +189,7 @@ class LibFuzzerMonitor(Thread):
         return list(self.stderr)
 
     def terminate(self) -> None:
-        print(f"[Job {self.mid}] Received terminate request...", file=sys.stderr)
+        LOG.warning("[Job %d] Received terminate request...", self.mid)
 
         # Avoid sending anything through the queue when the run() loop exits
         self.mqueue = None
@@ -263,15 +261,12 @@ def libfuzzer_main(
     assert opts.rargs
     binary = Path(opts.rargs[0])
     if not binary.exists():
-        print(f"error: Specified binary does not exist: {binary}", file=sys.stderr)
+        LOG.error("error: Specified binary does not exist: %s", binary)
         return 2
 
     base_cfg = ProgramConfiguration.fromBinary(binary)
     if base_cfg is None:
-        print(
-            "error: Failed to load program configuration based on binary",
-            file=sys.stderr,
-        )
+        LOG.error("error: Failed to load program configuration based on binary")
         return 2
 
     # Build our libFuzzer command line. We add certain parameters automatically for
@@ -295,23 +290,20 @@ def libfuzzer_main(
         # We currently don't support non-ASan binaries because the logic in
         # LibFuzzerMonitor expects an ASan trace on crash and CrashInfo doesn't
         # parse internal libFuzzer traces.
-        print(
+        LOG.error(
             "error: This wrapper currently only supports binaries built with "
-            "AddressSanitizer.",
-            file=sys.stderr,
+            "AddressSanitizer."
         )
         return 2
 
     for arg in cmdline:
         if arg.startswith("-jobs=") or arg.startswith("-workers="):
-            print(
-                "error: Using -jobs and -workers is incompatible with this wrapper.",
-                file=sys.stderr,
+            LOG.error(
+                "error: Using -jobs and -workers is incompatible with this wrapper."
             )
-            print(
+            LOG.error(
                 "       You can use --libfuzzer-instances to run multiple instances"
-                " instead.",
-                file=sys.stderr,
+                " instead."
             )
             return 2
 
@@ -345,7 +337,7 @@ def libfuzzer_main(
             # enforced by the instance(s) doing the actual testing.
             cmdline = [x for x in cmdline if not x.startswith("-max_len=")]
 
-            print("Running libFuzzer merge")
+            LOG.info("Running libFuzzer merge")
             # pylint: disable=consider-using-with
             proc = Popen(cmdline, stdout=devnull, env=base_env)
             last_stats_report = 0.0
@@ -385,10 +377,7 @@ def libfuzzer_main(
             break
 
     if corpus_dir is None:
-        print(
-            "error: Failed to find a corpus directory on command line.",
-            file=sys.stderr,
-        )
+        LOG.error("error: Failed to find a corpus directory on command line.")
         return 2
 
     # At this point we know that we will be running libFuzzer locally
@@ -417,7 +406,7 @@ def libfuzzer_main(
             )
 
         if corpus_auto_reduce_threshold <= len(original_corpus):
-            print("error: Invalid auto reduce threshold specified.", file=sys.stderr)
+            LOG.error("error: Invalid auto reduce threshold specified.")
             return 2
 
     corpus_syncer = CorpusSyncer(storage, Corpus(corpus_dir), opts.project)
@@ -447,7 +436,7 @@ def libfuzzer_main(
                 and restarts < 0
                 and all(x is None for x in monitors)
             ):
-                print("Run completed.", file=sys.stderr)
+                LOG.info("Run completed.")
                 break
 
             # Check if we need to (re)start any monitors
@@ -482,12 +471,12 @@ def libfuzzer_main(
                 and corpus_size is not None
                 and corpus_size >= corpus_auto_reduce_threshold
             ):
-                print("Preparing automated merge...", file=sys.stderr)
+                LOG.info("Preparing automated merge...")
 
                 # Time to Auto-reduce
                 for idx, monitor in enumerate(monitors):
                     if monitor is not None:
-                        print(f"Asking monitor {idx} to terminate...", file=sys.stderr)
+                        LOG.info("Asking monitor %d to terminate...", idx)
                         monitor.terminate()
                         monitor.join(30)
                         if monitor.is_alive():
@@ -523,13 +512,16 @@ def libfuzzer_main(
                 new_corpus_dir = Path(mkdtemp(prefix="fm-libfuzzer-automerge-"))
                 merge_cmdline.extend(["-merge=1", str(new_corpus_dir), str(corpus_dir)])
 
-                print("Running automated merge...", file=sys.stderr)
+                LOG.info("Running automated merge...")
                 env = os.environ.copy()
                 env["LD_LIBRARY_PATH"] = str(Path(merge_cmdline[0]).parent)
+                LOG.debug("run(%r, env=%r)", merge_cmdline, env)
                 run(merge_cmdline, stdout=devnull, env=env, check=True)
 
                 if not any(new_corpus_dir.iterdir()):
-                    print("error: Merge returned empty result, refusing to continue.")
+                    LOG.error(
+                        "error: Merge returned empty result, refusing to continue."
+                    )
                     return 2
 
                 rmtree(str(corpus_dir))
@@ -602,17 +594,14 @@ def libfuzzer_main(
                     monitor.execs_done
                 )
 
-            print(f"Job {result} terminated, processing results...", file=sys.stderr)
+            LOG.info("Job %d terminated, processing results...", result)
 
             trace = monitor.get_asan_trace()
             testcase = monitor.get_testcase()
             stderr = monitor.get_stderr()
 
             if not monitor.inited and not trace and not testcase:
-                print(
-                    "Process did not startup correctly, aborting... (1)",
-                    file=sys.stderr,
-                )
+                LOG.error("Process did not startup correctly, aborting... (1)")
                 return 2
 
             # libFuzzer can exit due to OOM with and without a testcase.
@@ -637,9 +626,8 @@ def libfuzzer_main(
                         hashname = testcase_name.split("-")[1]
                         potential_corpus_file = corpus_dir / hashname
                         if potential_corpus_file.exists():
-                            print(
-                                f"Removing problematic corpus file {hashname}...",
-                                file=sys.stderr,
+                            LOG.warning(
+                                "Removing problematic corpus file %s...", hashname
                             )
                             potential_corpus_file.unlink()
                             removed_corpus_files.add(potential_corpus_file)
@@ -650,10 +638,7 @@ def libfuzzer_main(
                     # If neither an OOM or a Timeout caused the startup failure or
                     # we couldn't find and remove the offending file, we should bail
                     # out at this point.
-                    print(
-                        "Process did not startup correctly, aborting... (2)",
-                        file=sys.stderr,
-                    )
+                    LOG.error("Process did not startup correctly, aborting... (2)")
                     return 2
 
                 if testcase_name.startswith("slow-unit-"):
@@ -673,7 +658,7 @@ def libfuzzer_main(
             crashes_per_minute += 1
 
             if crashes_per_minute >= 10:
-                print("Too many frequent crashes, exiting...", file=sys.stderr)
+                LOG.warning("Too many frequent crashes, exiting...")
 
                 if opts.stats:
                     # If statistics are reported to EC2SpotManager, this helps us to
@@ -684,7 +669,7 @@ def libfuzzer_main(
                 break
 
             if not monitor.inited:
-                print("Process crashed at startup, aborting...", file=sys.stderr)
+                LOG.warning("Process crashed at startup, aborting...")
                 if opts.stats:
                     # If statistics are reported to EC2SpotManager, this helps us to
                     # see when fuzzing has become impossible due to excessive
@@ -700,8 +685,8 @@ def libfuzzer_main(
                 assert testcase is not None
                 try:
                     testcase = apply_transform(opts.transform, testcase)
-                except Exception as exc:  # pylint: disable=broad-except
-                    print(exc.args[1], file=sys.stderr)
+                except Exception:  # pylint: disable=broad-except
+                    LOG.exception("exception while applying transform")
 
             # If we run in local mode (no --fuzzmanager specified), then we just
             # continue after each crash
@@ -722,10 +707,7 @@ def libfuzzer_main(
                     last_signature = sigfile
                     signature_repeat_count = 0
 
-                print(
-                    f"Crash matches signature {sigfile}, not submitting...",
-                    file=sys.stderr,
-                )
+                LOG.warning("Crash matches signature %s, not submitting...", sigfile)
             else:
                 collector.generate(
                     crash_info,
@@ -734,19 +716,14 @@ def libfuzzer_main(
                     numFrames=8,
                 )
                 collector.submit(crash_info, testcase)
-                print("Successfully submitted crash.", file=sys.stderr)
+                LOG.info("Successfully submitted crash.")
     finally:
-        try:
-            # Before doing anything, try to shutdown our monitors
-            for monitor in monitors:
-                if monitor is not None:
-                    monitor.terminate()
-                    monitor.join(10)
-        finally:
-            if sys.exc_info()[0] is not None:
-                # We caught an exception, print it now when all our monitors are
-                # down
-                print_exc()
+        LOG.info("Shutting down...")
+        # Before doing anything, try to shutdown our monitors
+        for monitor in monitors:
+            if monitor is not None:
+                monitor.terminate()
+                monitor.join(10)
 
         if opts.queue_upload:
             corpus_syncer.upload_queue(original_corpus)

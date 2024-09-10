@@ -142,7 +142,7 @@ def test_libfuzzer_04(libf, mocker):
     assert libf.writer.call_count > 0
 
 
-def test_libfuzzer_05(libf, tmp_path, capsys):
+def test_libfuzzer_05(caplog, libf, tmp_path):
     """negative arg tests"""
     libf.queue.return_value.get.side_effect = chain([0], repeat(Empty))
     (tmp_path / "firefox").unlink()
@@ -150,34 +150,39 @@ def test_libfuzzer_05(libf, tmp_path, capsys):
     libf.args.rargs.pop()
 
     assert libf.ret_main() == 2
-    stdio = capsys.readouterr()
-    assert "binary does not exist" in stdio.err
+    assert any("binary does not exist" in record.message for record in caplog.records)
     binary.touch()
 
     assert libf.ret_main() == 2
-    stdio = capsys.readouterr()
-    assert "corpus directory" in stdio.err
+    assert any("corpus directory" in record.message for record in caplog.records)
     libf.args.rargs.append(str(corpus))
 
     libf.args.rargs.append("-jobs=")
     assert libf.ret_main() == 2
-    stdio = capsys.readouterr()
-    assert "-jobs and -workers is incompatible" in stdio.err
+    assert any(
+        "-jobs and -workers is incompatible" in record.message
+        for record in caplog.records
+    )
     libf.args.rargs[-1] = "-workers="
     assert libf.ret_main() == 2
-    stdio = capsys.readouterr()
-    assert "-jobs and -workers is incompatible" in stdio.err
+    assert any(
+        "-jobs and -workers is incompatible" in record.message
+        for record in caplog.records
+    )
     libf.args.rargs.pop()
 
     libf.asan_test.return_value = False
     assert libf.ret_main() == 2
-    stdio = capsys.readouterr()
-    assert "binaries built with AddressSanitizer" in stdio.err
+    assert any(
+        "binaries built with AddressSanitizer" in record.message
+        for record in caplog.records
+    )
 
     libf.cfg.fromBinary.return_value = None
     assert libf.ret_main() == 2
-    stdio = capsys.readouterr()
-    assert "load program configuration" in stdio.err
+    assert any(
+        "load program configuration" in record.message for record in caplog.records
+    )
 
 
 def test_libfuzzer_monitor_01(mocker):
