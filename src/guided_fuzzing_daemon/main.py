@@ -15,7 +15,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 """
 from __future__ import annotations
 
-from logging import DEBUG, ERROR, INFO, basicConfig, getLogger
+from logging import DEBUG, ERROR, INFO, WARNING, basicConfig, getLogger
 from pathlib import Path
 
 from Collector.Collector import Collector
@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
         log_fmt = "%(message)s"
     basicConfig(format=log_fmt, datefmt="%Y-%m-%d %H:%M:%S", level=log_level)
     getLogger("urllib3.connectionpool").setLevel(ERROR)
+    getLogger("s3transfer").setLevel(WARNING)
+    getLogger("botocore").setLevel(WARNING)
 
     if opts.provider == "S3":
         storage: CloudStorageProvider = S3Storage(opts.bucket)
