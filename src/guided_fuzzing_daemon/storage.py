@@ -417,18 +417,25 @@ class CorpusSyncer:
         existing |= set(skip_hashes)
         # upload new files
         uploaded = 0
+        errors = 0
         with Executor() as executor:
             for testcase in self.corpus.path.iterdir():
-                hash_name = hashlib.sha1(testcase.read_bytes()).hexdigest()
+                try:
+                    hash_name = hashlib.sha1(testcase.read_bytes()).hexdigest()
+                except FileNotFoundError:
+                    LOG.error("-> file gone before we could hash it: %s", testcase)
+                    errors += 1
+                    continue
                 if hash_name not in existing:
                     remote_obj = self.provider[prefix / hash_name]
                     executor.submit(remote_obj.upload_from_file, testcase)
                     uploaded += 1
         LOG.info(
-            "upload_to_queue() -> before=%d, new=%d, after=%d (%.03fs)",
+            "upload_to_queue() -> before=%d, new=%d, after=%d, errors=%d (%.03fs)",
             old_corpus_size,
             uploaded,
             uploaded + old_corpus_size,
+            errors,
             perf_counter() - start,
         )
 
