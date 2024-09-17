@@ -97,6 +97,8 @@ def nyx_common(mocker, tmp_path):
                 idx = str(_instance_no(args))
                 (self.corpus_out / idx).mkdir(exist_ok=True)
                 (self.corpus_out / idx / "crashes").mkdir(exist_ok=True)
+                (self.corpus_out / idx / "queue").mkdir(exist_ok=True)
+                (self.corpus_out / idx / "queue" / "config.sh").touch()
                 (self.corpus_out / idx / "fuzzer_stats").touch()
                 return mocker.DEFAULT
 
@@ -104,6 +106,7 @@ def nyx_common(mocker, tmp_path):
             (self.sharedir / "firefox").mkdir(parents=True)
             binary = self.sharedir / "firefox" / "firefox"
             binary.touch()
+            (self.sharedir / "config.sh").touch()
             self.aflbindir.mkdir()
             self.corpus_in.mkdir()
             (self.corpus_in / "test1.bin").write_text("A")
@@ -608,6 +611,10 @@ def test_nyx_refresh_02(mocker, nyx, tmp_path):
         (tmp_path / "refresh" / "tests" / "min.bin").touch()
         return mocker.DEFAULT
 
+    def download_corpus():
+        (tmp_path / "refresh" / "queues" / "config.sh").touch()
+
+    syncer.return_value.download_corpus.side_effect = download_corpus
     nyx.args.stats = tmp_path / "stats"
     nyx.popen.side_effect = fake_run
     nyx.popen.return_value.poll.side_effect = chain(repeat(None, 35), [0])

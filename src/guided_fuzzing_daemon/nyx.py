@@ -8,7 +8,7 @@ from argparse import Namespace
 from logging import getLogger
 from pathlib import Path
 from random import choice
-from shutil import copy, rmtree, which
+from shutil import copy, move, rmtree, which
 from subprocess import DEVNULL, STDOUT, Popen, TimeoutExpired, run
 from tempfile import mkdtemp
 from time import sleep, time
@@ -42,6 +42,8 @@ def nyx_main(
     assert ASAN_SYMBOLIZE is not None
     assert not opts.rargs, "--nyx takes no positional args"
 
+    config_file = opts.sharedir / "config.sh"
+
     if opts.corpus_refresh:
         # Run afl-cmin
         afl_cmin = Path(opts.aflbindir) / "afl-cmin"
@@ -50,6 +52,14 @@ def nyx_main(
             return 2
 
         with CorpusRefreshContext(opts, storage) as merger:
+            # Copy config.sh to sharedir
+            if not (merger.queues_dir / "config.sh").exists():
+                raise RuntimeError(
+                    "Cannot refresh corpus without cmdline file.  Aborting..."
+                )
+
+            move(merger.queues_dir / "config.sh", config_file)
+
             afl_cmdline = [
                 str(afl_cmin),
                 "-e",
@@ -80,6 +90,9 @@ def nyx_main(
                 sleep(0.1)
             assert not proc.wait()
 
+            # Ensure the config.sh is in the final corpus
+            copy(config_file, merger.updated_tests_dir / "config.sh")
+
         assert merger.exit_code is not None
         return merger.exit_code
 
@@ -87,11 +100,11 @@ def nyx_main(
     assert opts.corpus_out
     assert opts.corpus_in.is_dir()
     assert opts.instances >= 1
+    assert config_file.is_file()
 
     opts.corpus_out.mkdir(parents=True, exist_ok=True)
-    corpus_syncer = CorpusSyncer(
-        storage, Corpus(opts.corpus_out / "0" / "queue"), opts.project
-    )
+    queue = Corpus(opts.corpus_out / "0" / "queue")
+    corpus_syncer = CorpusSyncer(storage, queue, opts.project)
 
     # Memorize the original corpus, so we can exclude it from uploading later
     original_corpus = {item.name for item in opts.corpus_in.iterdir()}
@@ -315,6 +328,7 @@ def nyx_main(
 
             # Only upload new corpus files every 2 hours or after corpus reduction
             if opts.queue_upload and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD:
+                copy(config_file, queue.path / "config.sh")
                 corpus_syncer.upload_queue(original_corpus)
                 last_queue_upload = time()
 
@@ -353,6 +367,7 @@ def nyx_main(
         log_tee.close()
 
         if opts.queue_upload:
+            copy(config_file, queue.path / "config.sh")
             corpus_syncer.upload_queue(original_corpus)
 
         # final stats
