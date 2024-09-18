@@ -426,6 +426,10 @@ class CorpusSyncer:
                     LOG.error("-> file gone before we could hash it: %s", testcase)
                     errors += 1
                     continue
+                except IsADirectoryError:
+                    LOG.error("-> directory detected in corpus: %s", testcase)
+                    errors += 1
+                    continue
                 if hash_name not in existing:
                     remote_obj = self.provider[prefix / hash_name]
                     executor.submit(remote_obj.upload_from_file, testcase)
