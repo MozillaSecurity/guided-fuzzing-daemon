@@ -52,6 +52,7 @@ RE_LIBFUZZER_FEAT = re.compile(r"\s+ft: (\d+)")
 # Used to set initialized to true, as the INITED message is not present with an empty
 # corpus
 NO_CORPUS_MSG = "INFO: A corpus is not provided, starting from an empty corpus"
+OOM_WAIT = 30
 
 
 class LibFuzzerMonitor(Thread):
@@ -94,6 +95,7 @@ class LibFuzzerMonitor(Thread):
     def run(self) -> None:
         assert not self.hit_thread_limit
         assert not self.had_oom
+        oom_detected: float | None = None
 
         try:
             while True:
@@ -149,19 +151,30 @@ class LibFuzzerMonitor(Thread):
                     self.testcase = Path(line.split()[-1])
 
                 # libFuzzer sometimes hangs on out-of-memory. Kill it
-                # right away if we detect this situation.
+                # if we detect this situation.
                 if (
                     self.kill_on_oom
                     and line.find("ERROR: libFuzzer: out-of-memory") >= 0
                 ):
                     self.had_oom = True
-                    self.process.kill()
+                    LOG.error("oom detected, waiting for process to terminate")
+                    oom_detected = time()
 
                 # Pass-through output
                 if self.mid is not None:
                     LOG.info("[Job %d] %s", self.mid, line)
                 else:
                     LOG.info("%s", line)
+
+                if oom_detected is not None:
+                    # wait for process to exit before calling kill()
+                    if (
+                        self.process.poll() is None
+                        and (time() - oom_detected) >= OOM_WAIT
+                    ):
+                        self.process.kill()
+                        # set back to None so we don't kill() again
+                        oom_detected = None
 
             self.process_stderr.close()
 
