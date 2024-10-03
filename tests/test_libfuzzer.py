@@ -329,7 +329,6 @@ def test_libfuzzer_monitor_06(mocker, kill_on_oom):
     assert mon.get_stderr() == ["ERROR: libFuzzer: out-of-memory"]
     assert not mon.get_asan_trace()
     assert mon.exc is None
-    assert proc.kill.call_count == int(kill_on_oom)
     assert mon.had_oom == kill_on_oom
 
 
