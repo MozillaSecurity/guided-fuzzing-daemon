@@ -422,6 +422,20 @@ def test_gcsfile_06(gcs, gcsfile, mocker):
     assert mock_blob.mock_calls == [mocker.call.exists()]
 
 
+@pytest.mark.parametrize(
+    "ignore", [pytest.param(True, id="ignore"), pytest.param(False, id="no-ignore")]
+)
+def test_gcsfile_07(gcsfile, tmp_path, ignore):
+    """test GCSFile.upload_from_file() - missing file"""
+    mock_src = tmp_path / "missing_file.txt"
+
+    if ignore:
+        gcsfile.upload_from_file(mock_src, ignore_failure=ignore)
+    else:
+        with pytest.raises(FileNotFoundError):
+            gcsfile.upload_from_file(mock_src, ignore_failure=ignore)
+
+
 def test_googlecloudstorage_01(gcs, mocker):
     """test GoogleCloudStorage.delete()"""
     mock_file = mocker.MagicMock(
@@ -576,6 +590,20 @@ def test_s3file_07(s3file, stubber):
         service_message="Not Found",
     )
     assert not s3file.exists()
+
+
+@pytest.mark.parametrize(
+    "ignore", [pytest.param(True, id="ignore"), pytest.param(False, id="no-ignore")]
+)
+def test_s3file_08(s3file, tmp_path, ignore):
+    """test S3File.upload_from_file() - missing file"""
+    mock_src = tmp_path / "missing_file.txt"
+
+    if ignore:
+        s3file.upload_from_file(mock_src, ignore_failure=ignore)
+    else:
+        with pytest.raises(FileNotFoundError):
+            s3file.upload_from_file(mock_src, ignore_failure=ignore)
 
 
 def test_s3storage_01(s3storage, stubber):
@@ -793,7 +821,9 @@ def test_syncer_04(mocker, skip_hashes, tmp_path):
         assert remote_path in expected_paths
         local_path = expected_paths.pop(remote_path)
         assert item_call == mocker.call.__getitem__(remote_path)
-        assert upload_call == mocker.call.__getitem__().upload_from_file(local_path)
+        assert upload_call == mocker.call.__getitem__().upload_from_file(
+            local_path, True
+        )
     # all should have been consumed
     assert not expected_paths
 
