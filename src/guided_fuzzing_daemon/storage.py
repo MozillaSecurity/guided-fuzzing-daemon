@@ -72,7 +72,7 @@ class CloudStorageFile(ABC):
         pass
 
     @abstractmethod
-    def upload_from_file(self, src: Path) -> None:
+    def upload_from_file(self, src: Path, ignore_failure: bool = False) -> None:
         pass
 
     @abstractmethod
@@ -169,11 +169,16 @@ class S3File(CloudStorageFile):
                 self._provider.bucket_name, str(self.path), fobj
             )
 
-    def upload_from_file(self, src: Path) -> None:
-        with src.open("rb") as fobj:
-            self._provider.client.upload_fileobj(
-                fobj, self._provider.bucket_name, str(self.path)
-            )
+    def upload_from_file(self, src: Path, ignore_failure: bool = False) -> None:
+        try:
+            with src.open("rb") as fobj:
+                self._provider.client.upload_fileobj(
+                    fobj, self._provider.bucket_name, str(self.path)
+                )
+        except FileNotFoundError as exc:
+            if not ignore_failure:
+                raise
+            LOG.warning("file upload failed: %s", exc)
 
     def trunc(self) -> None:
         self._provider.client.put_object(
@@ -280,9 +285,14 @@ class GCSFile(CloudStorageFile):
         with dest.open("wb") as fobj:
             self._provider.bucket.blob(str(self.path)).download_to_file(fobj)
 
-    def upload_from_file(self, src: Path) -> None:
-        with src.open("rb") as fobj:
-            self._provider.bucket.blob(str(self.path)).upload_from_file(fobj)
+    def upload_from_file(self, src: Path, ignore_failure: bool = False) -> None:
+        try:
+            with src.open("rb") as fobj:
+                self._provider.bucket.blob(str(self.path)).upload_from_file(fobj)
+        except FileNotFoundError as exc:
+            if not ignore_failure:
+                raise
+            LOG.warning("file upload failed: %s", exc)
 
     def trunc(self) -> None:
         self._provider.bucket.blob(str(self.path)).upload_from_string(b"")
@@ -432,7 +442,7 @@ class CorpusSyncer:
                     continue
                 if hash_name not in existing:
                     remote_obj = self.provider[prefix / hash_name]
-                    executor.submit(remote_obj.upload_from_file, testcase)
+                    executor.submit(remote_obj.upload_from_file, testcase, True)
                     uploaded += 1
         LOG.info(
             "upload_to_queue() -> before=%d, new=%d, after=%d, errors=%d (%.03fs)",
