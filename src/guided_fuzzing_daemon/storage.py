@@ -340,16 +340,20 @@ class GoogleCloudStorage(CloudStorageProvider):
 class CorpusSyncer:
     provider: CloudStorageProvider
     corpus: Corpus
-    project: PurePosixPath
+    project: PurePosixPath | None
 
     def __init__(
-        self, provider: CloudStorageProvider, corpus: Corpus, project: str
+        self, provider: CloudStorageProvider, corpus: Corpus, project: str | None
     ) -> None:
         self.provider = provider
         self.corpus = corpus
-        self.project = PurePosixPath(project)
+        if project is None:
+            self.project = None
+        else:
+            self.project = PurePosixPath(project)
 
     def download_corpus(self, random_subset_size: int | None = None) -> int:
+        assert self.project is not None
         start = perf_counter()
         with Executor() as executor:
             prefix = self.project / "corpus"
@@ -379,6 +383,7 @@ class CorpusSyncer:
         return downloaded
 
     def upload_corpus(self, delete_existing: bool = False) -> None:
+        assert self.project is not None
         start = perf_counter()
         with Executor() as executor:
             prefix = self.project / "corpus"
@@ -419,6 +424,7 @@ class CorpusSyncer:
             )
 
     def upload_queue(self, skip_hashes: Iterable[str]) -> None:
+        assert self.project is not None
         start = perf_counter()
         # get list of files existing
         prefix = self.project / "queues" / self.corpus.uuid
@@ -454,6 +460,7 @@ class CorpusSyncer:
         )
 
     def delete_queues(self) -> None:
+        assert self.project is not None
         start = perf_counter()
         # get list of queue files to delete
         prefix = self.project / "queues"
@@ -466,6 +473,7 @@ class CorpusSyncer:
         )
 
     def download_queues(self) -> dict[str, int]:
+        assert self.project is not None
         start = perf_counter()
         # download all queue files to corpus
         status_data = {}
