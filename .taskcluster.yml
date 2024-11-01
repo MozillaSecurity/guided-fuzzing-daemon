@@ -45,10 +45,6 @@ tasks:
         - tox; tox -e codecov
       jobs:
         include:
-          - name: tests python 3.8
-            version: "3.8"
-            env:
-              TOXENV: py38,lint
           - name: tests python 3.9
             version: "3.9"
             env:
@@ -61,6 +57,10 @@ tasks:
             version: "3.11"
             env:
               TOXENV: py311,lint
+          - name: tests python 3.12
+            version: "3.12"
+            env:
+              TOXENV: py312,lint
 
   in:
     $if: >
