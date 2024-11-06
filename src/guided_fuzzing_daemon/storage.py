@@ -164,6 +164,7 @@ class S3File(CloudStorageFile):
         self._have_meta = True
 
     def download_to_file(self, dest: Path) -> None:
+        LOG.debug("downloading %s", dest)
         with dest.open("wb") as fobj:
             self._provider.client.download_fileobj(
                 self._provider.bucket_name, str(self.path), fobj
@@ -282,6 +283,7 @@ class GCSFile(CloudStorageFile):
         self._have_meta = True
 
     def download_to_file(self, dest: Path) -> None:
+        LOG.debug("downloading %s", dest)
         with dest.open("wb") as fobj:
             self._provider.bucket.blob(str(self.path)).download_to_file(fobj)
 
