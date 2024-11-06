@@ -50,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     getLogger("urllib3.connectionpool").setLevel(ERROR)
     getLogger("s3transfer").setLevel(WARNING)
     getLogger("botocore").setLevel(WARNING)
+    getLogger("boto3").setLevel(WARNING)
 
     if opts.provider == "S3":
         storage: CloudStorageProvider = S3Storage(opts.bucket)

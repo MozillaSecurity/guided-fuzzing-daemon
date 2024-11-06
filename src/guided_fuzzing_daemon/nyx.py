@@ -55,7 +55,7 @@ def nyx_main(
             # Copy config.sh to sharedir
             if not (merger.queues_dir / "config.sh").exists():
                 raise RuntimeError(
-                    "Cannot refresh corpus without cmdline file.  Aborting..."
+                    "Cannot refresh corpus without config.sh file. Aborting..."
                 )
 
             move(merger.queues_dir / "config.sh", config_file)
