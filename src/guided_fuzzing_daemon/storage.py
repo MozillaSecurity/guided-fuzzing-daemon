@@ -361,21 +361,22 @@ class CorpusSyncer:
             prefix = self.project / "corpus"
             downloaded = 0
             if random_subset_size is None:
-                for file in self.provider.iter(prefix):
-                    out_path = self.corpus.path / file.path.name
-                    assert not out_path.exists()
-                    executor.submit(file.download_to_file, out_path)
-                    downloaded += 1
-                n_files = downloaded
+                file_iter = self.provider.iter(prefix)
             else:
                 all_files = tuple(self.provider.iter(prefix))
-                n_files = len(all_files)
-                for file in sample(all_files, random_subset_size):
-                    out_path = self.corpus.path / file.path.name
-                    assert not out_path.exists()
-                    executor.submit(file.download_to_file, out_path)
-                    downloaded += 1
-
+                n_files = min(random_subset_size, len(all_files))
+                LOG.info(
+                    "selecting %d files at random from %d total corpus files",
+                    random_subset_size,
+                    n_files,
+                )
+                file_iter = sample(all_files, random_subset_size)
+            for file in file_iter:
+                out_path = self.corpus.path / file.path.name
+                assert not out_path.exists()
+                executor.submit(file.download_to_file, out_path)
+                downloaded += 1
+            n_files = downloaded
         LOG.info(
             "download_corpus() -> downloaded=%d, total=%d (%.03fs)",
             downloaded,
