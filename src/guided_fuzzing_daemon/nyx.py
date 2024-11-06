@@ -51,7 +51,7 @@ def nyx_main(
             LOG.error("error: Unable to locate afl-cmin binary.")
             return 2
 
-        with CorpusRefreshContext(opts, storage) as merger:
+        with CorpusRefreshContext(opts, storage, [config_file]) as merger:
             # Copy config.sh to sharedir
             if not (merger.queues_dir / "config.sh").exists():
                 raise RuntimeError(
@@ -89,9 +89,6 @@ def nyx_main(
                     last_stats_report = time()
                 sleep(0.1)
             assert not proc.wait()
-
-            # Ensure the config.sh is in the final corpus
-            copy(config_file, merger.updated_tests_dir / "config.sh")
 
         assert merger.exit_code is not None
         return merger.exit_code
@@ -328,8 +325,9 @@ def nyx_main(
 
             # Only upload new corpus files every 2 hours or after corpus reduction
             if opts.queue_upload and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD:
-                copy(config_file, queue.path / "config.sh")
                 corpus_syncer.upload_queue(original_corpus)
+                remote_obj = storage[opts.project / "queues" / queue.uuid / "config.sh"]
+                remote_obj.upload_from_file(config_file, True)
                 last_queue_upload = time()
 
             # Calculate stats
@@ -367,8 +365,9 @@ def nyx_main(
         log_tee.close()
 
         if opts.queue_upload:
-            copy(config_file, queue.path / "config.sh")
             corpus_syncer.upload_queue(original_corpus)
+            remote_obj = storage[opts.project / "queues" / queue.uuid / "config.sh"]
+            remote_obj.upload_from_file(config_file, True)
 
         # final stats
         if opts.stats:

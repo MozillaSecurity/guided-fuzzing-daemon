@@ -509,12 +509,13 @@ class CorpusSyncer:
 
 class CorpusRefreshContext:
 
-    def __init__(self, opts: Namespace, storage: CloudStorageProvider) -> None:
+    def __init__(self, opts: Namespace, storage: CloudStorageProvider, extra_files: Iterable[Path] = ()) -> None:
         self.project = opts.project
         self.cloud_path = f"{opts.provider.lower()}://{opts.bucket}/{opts.project}"
         self.storage = storage
         self.stats = opts.stats
         self.exit_code: int | None = None
+        self.extra_files = extra_files
 
         self.refresh_stats = StatAggregator()
         self.refresh_stats.add_field("queue_files", GeneratedField())
@@ -587,6 +588,9 @@ class CorpusRefreshContext:
             self.storage, Corpus(self.updated_tests_dir), self.project
         )
         corpus_uploader.upload_corpus(delete_existing=True)
+        for extra in self.extra_files:
+            remote_obj = self.storage[self.project / "corpus" / extra.name]
+            remote_obj.upload_from_file(extra)
         corpus_uploader.delete_queues()
 
         self.exit_code = 0
