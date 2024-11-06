@@ -509,7 +509,12 @@ class CorpusSyncer:
 
 class CorpusRefreshContext:
 
-    def __init__(self, opts: Namespace, storage: CloudStorageProvider, extra_files: Iterable[Path] = ()) -> None:
+    def __init__(
+        self,
+        opts: Namespace,
+        storage: CloudStorageProvider,
+        extra_files: Iterable[Path] = (),
+    ) -> None:
         self.project = opts.project
         self.cloud_path = f"{opts.provider.lower()}://{opts.bucket}/{opts.project}"
         self.storage = storage
@@ -589,7 +594,9 @@ class CorpusRefreshContext:
         )
         corpus_uploader.upload_corpus(delete_existing=True)
         for extra in self.extra_files:
-            remote_obj = self.storage[self.project / "corpus" / extra.name]
+            remote_obj = self.storage[
+                PurePosixPath(self.project) / "corpus" / extra.name
+            ]
             remote_obj.upload_from_file(extra)
         corpus_uploader.delete_queues()
 

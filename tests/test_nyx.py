@@ -65,7 +65,7 @@ def nyx_common(mocker, tmp_path):
         crash_info = mocker.patch("guided_fuzzing_daemon.nyx.CrashInfo", autospec=True)
         popen = mocker.patch("guided_fuzzing_daemon.nyx.Popen", autospec=True)
         run = mocker.patch("guided_fuzzing_daemon.nyx.run", autospec=True)
-        s3m = mocker.Mock(spec=CloudStorageProvider)
+        s3m = mocker.MagicMock(spec=CloudStorageProvider)
         s3m.iter.side_effect = iter_impl
         sharedir = tmp_path / "sharedir"
         # set `side_effect=chain(repeat(None, <n>), [NyxMainBreak])` to control how many
