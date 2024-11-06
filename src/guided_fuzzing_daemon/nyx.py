@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from argparse import Namespace
 from logging import getLogger
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from random import choice
 from shutil import copy, move, rmtree, which
 from subprocess import DEVNULL, STDOUT, Popen, TimeoutExpired, run
@@ -326,7 +326,9 @@ def nyx_main(
             # Only upload new corpus files every 2 hours or after corpus reduction
             if opts.queue_upload and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD:
                 corpus_syncer.upload_queue(original_corpus)
-                remote_obj = storage[opts.project / "queues" / queue.uuid / "config.sh"]
+                remote_obj = storage[
+                    PurePosixPath(opts.project) / "queues" / queue.uuid / "config.sh"
+                ]
                 remote_obj.upload_from_file(config_file, True)
                 last_queue_upload = time()
 
@@ -366,7 +368,9 @@ def nyx_main(
 
         if opts.queue_upload:
             corpus_syncer.upload_queue(original_corpus)
-            remote_obj = storage[opts.project / "queues" / queue.uuid / "config.sh"]
+            remote_obj = storage[
+                PurePosixPath(opts.project) / "queues" / queue.uuid / "config.sh"
+            ]
             remote_obj.upload_from_file(config_file, True)
 
         # final stats
