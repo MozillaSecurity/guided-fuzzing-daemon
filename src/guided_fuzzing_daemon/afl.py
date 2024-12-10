@@ -128,9 +128,6 @@ def afl_main(
 ) -> int:
     assert opts.aflbindir.is_dir()
     assert opts.rargs, "--afl expects at least one positional arg (target binary)"
-    assert opts.corpus_in
-    assert opts.corpus_out
-    assert opts.corpus_in.is_dir()
     assert opts.instances >= 1
 
     binary = Path(opts.rargs[0]).resolve()
@@ -179,6 +176,10 @@ def afl_main(
 
         assert merger.exit_code is not None
         return merger.exit_code
+
+    assert opts.corpus_in
+    assert opts.corpus_out
+    assert opts.corpus_in.is_dir()
 
     opts.corpus_out.mkdir(parents=True, exist_ok=True)
     corpus_syncer = CorpusSyncer(
