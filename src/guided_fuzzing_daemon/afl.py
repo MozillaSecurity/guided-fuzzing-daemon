@@ -265,6 +265,9 @@ def afl_main(
                             for additional_corpus in opts.afl_add_corpus:
                                 cmd.extend(("-F", str(additional_corpus)))
 
+                    if opts.memory_limit:
+                        cmd.extend(("-m", f"{opts.memory_limit}"))
+
                     # environment settings that apply to this instance
                     this_env = envs[idx].copy()
                     if opts.afl_async_corpus and not idx:

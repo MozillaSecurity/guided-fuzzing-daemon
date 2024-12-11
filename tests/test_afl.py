@@ -525,6 +525,22 @@ def test_afl_11(afl, mocker, tmp_path):
     assert set(_get_path_args("-F", sec.args[0])) == set()
 
 
+def test_afl_12(afl, tmp_path):
+    """afl max memory"""
+    # setup
+    afl.args.memory_limit = 10
+    afl.sleep.side_effect = chain(repeat(None, 60), [MainBreak, None])
+
+    # test
+    chdir(tmp_path)
+    with pytest.raises(MainBreak):
+        afl_main(afl.args, afl.collector, afl.s3m)
+
+    popen_calls = afl.popen.call_args_list
+    assert len(popen_calls) == 1
+    assert popen_calls[0].args[0][popen_calls[0].args[0].index("-m") + 1] == "10"
+
+
 def test_afl_refresh_01(afl, mocker, tmp_path):
     """AFL corpus refresh cmin"""
     # setup
