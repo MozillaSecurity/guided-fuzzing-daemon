@@ -335,6 +335,12 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         metavar="MSECS",
     )
     afl_group.add_argument(
+        "--memory-limit",
+        "-m",
+        help="Set memory limit for child process",
+        metavar="MEGS",
+    )
+    afl_group.add_argument(
         "--env-file",
         type=Path,
         help="Path to a file with additional environment variables",
