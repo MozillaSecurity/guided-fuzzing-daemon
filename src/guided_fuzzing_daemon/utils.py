@@ -9,12 +9,14 @@ import tempfile
 import time
 import zipfile
 from argparse import Namespace
+from collections.abc import Callable
 from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from copy import copy
 from math import log10
 from pathlib import Path
 from random import uniform
+from re import Match, Pattern
 from typing import Iterable, Iterator, TextIO, TypeVar
 
 from FTB.ProgramConfiguration import ProgramConfiguration
@@ -176,7 +178,6 @@ def Executor() -> Iterator[ThreadPoolExecutor]:  # pylint: disable=invalid-name
                     raise
 
     class _Executor(ThreadPoolExecutor):
-
         # the typing for this is almost impossible until 3.10
         # see `typing.ParamSpec`
         # pylint: disable=arguments-differ
@@ -199,6 +200,21 @@ class LogFile:
         self.tee_buf = ""
         self.printed_pos = 0
         self.prefix = prefix
+        # pattern is matched against each line of output. on_match must be set
+        self.pattern: Pattern[str] | None = None
+        # on_match is called when pattern matches
+        self.on_match: Callable[[str, Match[str]], None] | None = None
+
+    def add_pattern(
+        self, pattern: Pattern[str], on_match: Callable[[str, Match[str]], None]
+    ) -> None:
+        self.pattern = pattern
+        self.on_match = on_match
+
+    def check_match(self, line: str) -> None:
+        if self.pattern is not None and self.on_match is not None:
+            if (match := self.pattern.match(line)) is not None:
+                self.on_match(line, match)
 
     def print(self, flush: bool = False) -> None:
         with Path(self.handle.name).open(encoding="utf-8") as read_file:
@@ -213,8 +229,10 @@ class LogFile:
             lines = f"{self.tee_buf}{lines}"
             self.tee_buf = tail
             for line in lines.splitlines():
+                self.check_match(line)
                 print(f"[{self.prefix}] {line}")
         if flush and self.tee_buf:
+            self.check_match(self.tee_buf)
             print(f"[{self.prefix}] {self.tee_buf}")
             self.tee_buf = ""
 
@@ -227,11 +245,26 @@ class LogTee:
         else:
             self.instance_width = 1
         self.hide = hide
+        # pattern is matched against each line of output. on_match must be set
+        self.pattern: Pattern[str] | None = None
+        # on_match is called when pattern matches
+        self.on_match: Callable[[str, Match[str]], None] | None = None
+
+    def add_pattern(
+        self, pattern: Pattern[str], on_match: Callable[[str, Match[str]], None]
+    ) -> None:
+        self.pattern = pattern
+        self.on_match = on_match
+        for open_file in self.open_files:
+            open_file.add_pattern(pattern, on_match)
 
     def append(self, handle: TextIO) -> None:
         idx = len(self.open_files)
         prefix = f"{idx:{self.instance_width}}"
-        self.open_files.append(LogFile(handle, prefix))
+        lf = LogFile(handle, prefix)
+        if self.pattern is not None and self.on_match is not None:
+            lf.add_pattern(self.pattern, self.on_match)
+        self.open_files.append(lf)
 
     def print(self) -> None:
         if not self.hide:

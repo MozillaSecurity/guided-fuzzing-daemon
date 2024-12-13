@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 from argparse import Namespace
 from logging import getLogger
 from pathlib import Path
@@ -129,6 +130,10 @@ def afl_main(
     assert opts.aflbindir.is_dir()
     assert opts.rargs, "--afl expects at least one positional arg (target binary)"
     assert opts.instances >= 1
+    # afl-fuzz suggested running with AFL_DEBUG=1
+    run_with_debug = False
+    # num. of times AFL_DEBUG=1 has been run
+    debug_runs = 0
 
     binary = Path(opts.rargs[0]).resolve()
     assert binary.is_file()
@@ -141,7 +146,6 @@ def afl_main(
             return 2
 
         with CorpusRefreshContext(opts, storage) as merger:
-
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = f"{binary.parent / 'gtest'}:{binary.parent}"
 
@@ -212,8 +216,19 @@ def afl_main(
 
     warn_local(opts)
 
+    def on_afl_debug_suggested(_line: str, _match: re.Match[str]) -> None:
+        nonlocal run_with_debug
+        LOG.warning(
+            "AFL_DEBUG=1 suggested by afl-fuzz, will run once with AFL_DEBUG and then "
+            "exit"
+        )
+        run_with_debug = True
+
     procs: list[Popen[str] | None] = [None] * opts.instances
     log_tee = LogTee(opts.afl_hide_logs, opts.instances)
+    log_tee.add_pattern(
+        re.compile(r".*Run again with AFL_DEBUG=1"), on_afl_debug_suggested
+    )
 
     # Memorize the original corpus, so we can exclude it from uploading later
     original_corpus = {item.name for item in opts.corpus_in.iterdir()}
@@ -246,6 +261,9 @@ def afl_main(
                     LOG.warning("afl-fuzz returned early: %d", proc.wait())
                     procs[idx] = proc = None
                     stats.fields["instances"] -= 1  # type: ignore
+                    if run_with_debug and debug_runs:
+                        # we ran once with AFL_DEBUG=1, time to stop
+                        return 1
 
                 if (
                     proc is None
@@ -254,6 +272,14 @@ def afl_main(
                     # don't launch secondary instances until main instance has finished
                     # initializing
                     and (not idx or (opts.corpus_out / "0" / "fuzzer_stats").exists())
+                    # if AFL_DEBUG=1 was suggested, only launch the main instance once
+                    # more before terminating
+                    and (
+                        not run_with_debug
+                        or (
+                            not idx and not debug_runs and not stats.fields["instances"]
+                        )
+                    )
                 ):
                     if idx:
                         cmd = ["-S", str(idx), "-p", choice(POWER_SCHEDS)]
@@ -274,6 +300,9 @@ def afl_main(
                         this_env["AFL_IMPORT_FIRST"] = "1"
                     if not idx:
                         this_env["AFL_FINAL_SYNC"] = "1"
+                        if run_with_debug:
+                            this_env["AFL_DEBUG"] = "1"
+                            debug_runs += 1
 
                     # pylint: disable=consider-using-with
                     procs[idx] = Popen(
