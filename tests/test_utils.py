@@ -2,6 +2,7 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+import re
 import sys
 from collections import OrderedDict
 from threading import Lock
@@ -10,7 +11,7 @@ from time import sleep
 import pytest
 from FTB.ProgramConfiguration import ProgramConfiguration
 
-from guided_fuzzing_daemon.utils import Executor, create_envs
+from guided_fuzzing_daemon.utils import Executor, LogFile, LogTee, create_envs
 
 
 def test_create_envs(mocker):
@@ -124,3 +125,128 @@ def test_executor_02(mocker):
     assert len(cancelled_futures) <= 3  # at least one should pass, and one should raise
     exceptions = [f for f in futures if not f.cancelled() and f.exception()]
     assert len(exceptions) == 1
+
+
+def test_logfile(capsys, tmp_path):
+    """test that LogFile works"""
+    called = False
+
+    def on_pattern(_line, _match):
+        nonlocal called
+        called = True
+
+    with (tmp_path / "test.txt").open("w") as fd:
+        lf = LogFile(fd, "0")
+        lf.add_pattern(re.compile(r"^test"), on_pattern)
+        assert not called
+        # check that 'hello world' is printed and doesn't match pattern
+        print("hello world", file=fd)
+        fd.flush()
+        lf.print()
+        cap = capsys.readouterr()
+        assert cap.out == "[0] hello world\n"
+        assert cap.err == ""
+        assert not called
+        # check that partial write is buffered and does match pattern
+        print("tes", file=fd, end="")
+        fd.flush()
+        lf.print()
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err == ""
+        assert not called
+        print("t", file=fd)
+        fd.flush()
+        lf.print()
+        cap = capsys.readouterr()
+        assert cap.out == "[0] test\n"
+        assert cap.err == ""
+        assert called
+        called = False
+        # check that final flushed print will still match pattern
+        print("test", file=fd, end="")
+        fd.flush()
+        lf.print()
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err == ""
+        assert not called
+        lf.print(flush=True)
+        cap = capsys.readouterr()
+        assert cap.out == "[0] test\n"
+        assert cap.err == ""
+        assert called
+
+
+# instances are 0 based, so 100 instances is 0..99, etc.
+@pytest.mark.parametrize(
+    "instances,width", ((1, 1), (10, 1), (11, 2), (100, 2), (101, 3))
+)
+def test_logtee_width(instances, width):
+    """test that logtee instance count correctly calculates prefix width"""
+    lt = LogTee(False, instances)
+    assert lt.instance_width == width
+
+
+def test_logtee_1(mocker, tmp_path):
+    """test that logtee passes calls through to a logfile instance"""
+
+    def on_pattern(_line, _match):
+        pass
+
+    lf = mocker.patch("guided_fuzzing_daemon.utils.LogFile")
+    lt = LogTee(False, 1)
+    assert lt.pattern is None
+    pat = re.compile(r"")
+    lt.add_pattern(pat, on_pattern)
+    assert lt.pattern is pat
+    with (tmp_path / "test.txt").open("w") as fd:
+        lt.append(fd)
+        assert lf.call_args_list == [mocker.call(fd, "0")]
+        lf0 = lf.return_value
+        assert lf0.add_pattern.call_args_list == [mocker.call(pat, on_pattern)]
+        assert lf0.print.call_count == 0
+        lt.print()
+        assert lf0.print.call_args_list == [mocker.call()]
+        lt.close()
+        assert lf0.print.call_args_list == [mocker.call(), mocker.call(flush=True)]
+        assert lf0.handle.close.call_count == 1
+
+
+def test_logtee_2(mocker, tmp_path):
+    """test that logtee passes calls through to two logfile instances"""
+
+    def on_pattern(_line, _match):
+        pass
+
+    lf = mocker.patch("guided_fuzzing_daemon.utils.LogFile")
+    lt = LogTee(False, 1)
+    assert lt.pattern is None
+    pat = re.compile(r"")
+    with (tmp_path / "test1.txt").open("w") as f1, (tmp_path / "test2.txt").open(
+        "w"
+    ) as f2:
+        lt.append(f1)
+        assert lf.call_args_list == [mocker.call(f1, "0")]
+        # TODO: mocker doesn't give an easy way to distinguish multiple return values
+        # so all calls below are doubled, as if they occurred on the same LogFile()
+        lf0 = lf.return_value
+        lt.append(f2)
+        assert lf.call_args_list == [mocker.call(f1, "0"), mocker.call(f2, "1")]
+        lt.add_pattern(pat, on_pattern)
+        assert lt.pattern is pat
+        assert lf0.add_pattern.call_args_list == [
+            mocker.call(pat, on_pattern),
+            mocker.call(pat, on_pattern),
+        ]
+        assert lf0.print.call_count == 0
+        lt.print()
+        assert lf0.print.call_args_list == [mocker.call(), mocker.call()]
+        lt.close()
+        assert lf0.print.call_args_list == [
+            mocker.call(),
+            mocker.call(),
+            mocker.call(flush=True),
+            mocker.call(flush=True),
+        ]
+        assert lf0.handle.close.call_count == 2
