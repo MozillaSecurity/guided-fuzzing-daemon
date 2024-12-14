@@ -277,7 +277,9 @@ def afl_main(
                     and (
                         not run_with_debug
                         or (
-                            not idx and not debug_runs and not stats.fields["instances"]
+                            not idx
+                            and not debug_runs
+                            and not stats.fields["instances"].value
                         )
                     )
                 ):
