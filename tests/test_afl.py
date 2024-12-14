@@ -386,7 +386,6 @@ def test_afl_07(afl):
     assert afl.popen.return_value.terminate.call_count == 1
 
 
-# test that logs are teed
 @pytest.mark.parametrize(
     "instances, hide, pattern",
     [
@@ -397,7 +396,7 @@ def test_afl_07(afl):
     ],
 )
 def test_afl_08(afl, capsys, hide, instances, pattern, tmp_path):
-    """afl exited processes are restarted"""
+    """test that logs are teed"""
     # setup
     afl.sleep.side_effect = chain(repeat(None, 124), [MainBreak, None])
     afl.args.afl_hide_logs = hide
@@ -539,6 +538,66 @@ def test_afl_12(afl, tmp_path):
     popen_calls = afl.popen.call_args_list
     assert len(popen_calls) == 1
     assert popen_calls[0].args[0][popen_calls[0].args[0].index("-m") + 1] == "10"
+
+
+def test_afl_13(afl, mocker, tmp_path):
+    """afl debug is handled"""
+    # setup
+    afl.sleep.side_effect = chain(repeat(None, 1000), [MainBreak, None])
+    afl.args.afl_log_pattern = str(tmp_path / "afl%d")
+    afl.args.instances = 2
+    cfg1 = mocker.Mock(spec=ProgramConfiguration)
+    cfg2 = mocker.Mock(spec=ProgramConfiguration)
+    mocker.patch(
+        "guided_fuzzing_daemon.afl.create_envs",
+        return_value=(
+            ({}, {}),
+            (cfg1, cfg2),
+        ),
+    )
+
+    debug_printed = False
+
+    def is_terminated():
+        if debug_printed:
+            return 1
+        return None
+
+    afl.popen.return_value.poll.side_effect = is_terminated
+    orig_sleep_iter = afl.sleep.side_effect
+
+    def sleep_write_logs(*args, **_kwds):
+        nonlocal debug_printed
+        # write to log files whenever sleep() is called in the afl_main loop
+        for args, _kwds in afl.popen.call_args_list:
+            idx = _instance_no(args)
+            filename = afl.args.afl_log_pattern % (idx,)
+            if idx == 1 and not debug_printed:
+                with open(filename, "a", encoding="utf-8") as hnd:
+                    print("Run again with AFL_DEBUG=1", file=hnd)
+                    debug_printed = True
+        # handle default sleep() side-effects
+        result = next(orig_sleep_iter)
+        if isinstance(result, type) and issubclass(result, Exception):
+            raise result()
+        return result
+
+    afl.sleep.side_effect = sleep_write_logs
+
+    # test
+    # afl.main()
+    assert afl.ret_main() == 1
+
+    # exited process should have been restarted once
+    assert afl.popen.call_count == 3
+    assert afl.popen.call_args_list[0][1]["env"] == {
+        "AFL_FINAL_SYNC": "1",
+    }
+    assert afl.popen.call_args_list[1][1]["env"] == {}
+    assert afl.popen.call_args_list[2][1]["env"] == {
+        "AFL_FINAL_SYNC": "1",
+        "AFL_DEBUG": "1",
+    }
 
 
 def test_afl_refresh_01(afl, mocker, tmp_path):
