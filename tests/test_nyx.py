@@ -188,6 +188,7 @@ def test_nyx_02(mocker, nyx):
     # setup
     mocker.patch("guided_fuzzing_daemon.nyx.QUEUE_UPLOAD_PERIOD", 90)
     syncer = mocker.patch("guided_fuzzing_daemon.nyx.CorpusSyncer", autospec=True)
+    syncer.return_value.extra_queues = []
     nyx.sleep.side_effect = chain(repeat(None, 60), [NyxMainBreak, None])
     nyx.args.queue_upload = True
 
