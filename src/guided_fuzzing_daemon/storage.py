@@ -342,6 +342,7 @@ class GoogleCloudStorage(CloudStorageProvider):
 class CorpusSyncer:
     provider: CloudStorageProvider
     corpus: Corpus
+    extra_queues: list[Corpus]  # only used by upload_queues()
     project: PurePosixPath | None
 
     def __init__(
@@ -349,6 +350,7 @@ class CorpusSyncer:
     ) -> None:
         self.provider = provider
         self.corpus = corpus
+        self.extra_queues = []
         if project is None:
             self.project = None
         else:
@@ -438,21 +440,25 @@ class CorpusSyncer:
         uploaded = 0
         errors = 0
         with Executor() as executor:
-            for testcase in self.corpus.path.iterdir():
-                try:
-                    hash_name = hashlib.sha1(testcase.read_bytes()).hexdigest()
-                except FileNotFoundError:
-                    LOG.error("-> file gone before we could hash it: %s", testcase)
-                    errors += 1
+            for queue in [self.corpus, *self.extra_queues]:
+                if not queue.path.is_dir():
                     continue
-                except IsADirectoryError:
-                    LOG.error("-> directory detected in corpus: %s", testcase)
-                    errors += 1
-                    continue
-                if hash_name not in existing:
-                    remote_obj = self.provider[prefix / hash_name]
-                    executor.submit(remote_obj.upload_from_file, testcase, True)
-                    uploaded += 1
+                for testcase in queue.path.iterdir():
+                    try:
+                        hash_name = hashlib.sha1(testcase.read_bytes()).hexdigest()
+                    except FileNotFoundError:
+                        LOG.error("-> file gone before we could hash it: %s", testcase)
+                        errors += 1
+                        continue
+                    except IsADirectoryError:
+                        LOG.error("-> directory detected in corpus: %s", testcase)
+                        errors += 1
+                        continue
+                    if hash_name not in existing:
+                        existing.add(hash_name)
+                        remote_obj = self.provider[prefix / hash_name]
+                        executor.submit(remote_obj.upload_from_file, testcase, True)
+                        uploaded += 1
         LOG.info(
             "upload_to_queue() -> before=%d, new=%d, after=%d, errors=%d (%.03fs)",
             old_corpus_size,

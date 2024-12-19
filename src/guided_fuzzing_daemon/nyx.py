@@ -102,6 +102,11 @@ def nyx_main(
     opts.corpus_out.mkdir(parents=True, exist_ok=True)
     queue = Corpus(opts.corpus_out / "0" / "queue")
     corpus_syncer = CorpusSyncer(storage, queue, opts.project)
+    # sync all queues, since AFL_FINAL_SYNC isn't foolproof
+    corpus_syncer.extra_queues.extend(
+        Corpus(opts.corpus_out / str(inst) / "queue")
+        for inst in range(1, opts.instances)
+    )
 
     # Memorize the original corpus, so we can exclude it from uploading later
     original_corpus = {item.name for item in opts.corpus_in.iterdir()}

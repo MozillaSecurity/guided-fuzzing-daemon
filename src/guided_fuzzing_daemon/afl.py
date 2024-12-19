@@ -189,6 +189,11 @@ def afl_main(
     corpus_syncer = CorpusSyncer(
         storage, Corpus(opts.corpus_out / "0" / "queue"), opts.project
     )
+    # sync all queues, since AFL_FINAL_SYNC isn't foolproof
+    corpus_syncer.extra_queues.extend(
+        Corpus(opts.corpus_out / str(inst) / "queue")
+        for inst in range(1, opts.instances)
+    )
 
     if opts.max_runtime == 0.0:
         opts.max_runtime = float("inf")
