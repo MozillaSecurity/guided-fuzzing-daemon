@@ -185,6 +185,7 @@ def test_afl_02(afl, mocker):
     afl.sleep.side_effect = chain(repeat(None, 60), [MainBreak, None])
     afl.args.queue_upload = True
     syncer = mocker.patch("guided_fuzzing_daemon.afl.CorpusSyncer", autospec=True)
+    syncer.return_value.extra_queues = []
 
     # test
     afl.main()

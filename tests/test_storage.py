@@ -884,12 +884,9 @@ def test_syncer_07(mocker, skip_hashes, tmp_path):
     """test upload_queue() with extras"""
     # pylint: disable=unnecessary-dunder-call
     storage = mocker.MagicMock(spec=CloudStorageProvider)
+    # create a queue with 4 files, 1 of which might be skipped by skip_hashes
     q1 = tmp_path / "1"
-    q2 = tmp_path / "2"
-    q3 = tmp_path / "3"
     q1.mkdir()
-    q2.mkdir()
-    q3.mkdir()
     corpus = Corpus(q1)
     (q1 / "61").write_text("a")
     l2 = q1 / "62"
@@ -898,9 +895,15 @@ def test_syncer_07(mocker, skip_hashes, tmp_path):
     l3.write_text("c")
     l4 = q1 / "64"
     l4.write_text("d")
+    # second queue contains 2 files, 1 of which exists in the first (never uploaded)
+    q2 = tmp_path / "2"
+    q2.mkdir()
     (q2 / "64").write_text("d")
     l5 = q2 / "65"
     l5.write_text("e")
+    # third queue contains 1 unique file, to show that all queues are uploaded
+    q3 = tmp_path / "3"
+    q3.mkdir()
     l6 = q3 / "66"
     l6.write_text("f")
     f1 = mocker.Mock(
