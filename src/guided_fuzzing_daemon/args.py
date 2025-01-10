@@ -244,12 +244,6 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
     )
 
     fm_group.add_argument(
-        "--custom-cmdline-file",
-        type=Path,
-        help="Path to custom cmdline file",
-        metavar="FILE",
-    )
-    fm_group.add_argument(
         "--serverhost",
         help="Server hostname for remote signature management.",
         metavar="HOST",
@@ -345,13 +339,6 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         type=Path,
         help="Path to a file with additional environment variables",
         metavar="FILE",
-    )
-    afl_group.add_argument(
-        "--afl-output-dir",
-        type=Path,
-        dest="afloutdir",
-        help="Path to the AFL output directory to manage",
-        metavar="DIR",
     )
     afl_group.add_argument(
         "--afl-binary-dir",
