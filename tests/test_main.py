@@ -65,7 +65,7 @@ def test_main_02(caplog, mocker):
     assert any("Unhandled case" in record.message for record in caplog.records)
 
 
-@pytest.mark.parametrize("mode", ("afl", "libfuzzer", "nyx"))
+@pytest.mark.parametrize("mode", ("afl", "fuzzilli", "libfuzzer", "nyx"))
 def test_main_03(mocker, mode):
     """fuzzer modes"""
     args_mock = mocker.patch("guided_fuzzing_daemon.main.parse_args")
@@ -74,6 +74,7 @@ def test_main_03(mocker, mode):
     mocker.patch("guided_fuzzing_daemon.main.S3Storage")
     mocks = {
         "afl": mocker.patch("guided_fuzzing_daemon.main.afl_main"),
+        "fuzzilli": mocker.patch("guided_fuzzing_daemon.main.fuzzilli_main"),
         "libfuzzer": mocker.patch("guided_fuzzing_daemon.main.libfuzzer_main"),
         "nyx": mocker.patch("guided_fuzzing_daemon.main.nyx_main"),
     }

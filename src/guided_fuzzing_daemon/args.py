@@ -43,7 +43,7 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
     # setup argparser
     parser = ArgumentParser(
         usage=(
-            f"{program_name} --afl or --libfuzzer or --nyx [OPTIONS] "
+            f"{program_name} --afl or --fuzzilli or --libfuzzer or --nyx [OPTIONS] "
             "--cmd <COMMAND AND ARGUMENTS>"
         )
     )
@@ -57,6 +57,9 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
     )
     nyx_group = parser.add_argument_group(
         title="Nyx Options", description="Use these arguments in Nyx mode."
+    )
+    fzli_group = parser.add_argument_group(
+        title="Fuzzilli Options", description="Use these arguments in Fuzzilli mode."
     )
     fm_group = parser.add_argument_group(
         title="FuzzManager Options",
@@ -90,6 +93,13 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         const="afl",
         dest="mode",
         help="Enable AFL mode",
+    )
+    mode_group.add_argument(
+        "--fuzzilli",
+        action="store_const",
+        const="fuzzilli",
+        dest="mode",
+        help="Enable Fuzzilli mode",
     )
     mode_group.add_argument(
         "--libfuzzer",
@@ -132,9 +142,17 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
     main_group.add_argument(
         "--timeout",
         type=int,
-        help="Timeout per test (applies to AFL, Nyx)",
+        help="Timeout per test (applies to AFL, Fuzzilli, Nyx)",
         metavar="MSECS",
     )
+    main_group.add_argument(
+        "--corpus-out",
+        "-o",
+        type=Path,
+        help="Output directory for findings. (applies to AFL, Fuzzilli, Nyx)",
+        metavar="DIR",
+    )
+    main_group.add_argument("rargs", nargs=REMAINDER)
 
     storage_group.add_argument(
         "--list-projects",
@@ -201,6 +219,19 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         "--project",
         help="Name of the subfolder/project inside the cloud storage bucket",
         metavar="NAME",
+    )
+
+    fzli_group.add_argument(
+        "--build-dir",
+        dest="fuzzilli_build_dir",
+        type=Path,
+        help="Path to the Fuzzilli build directory",
+        metavar="DIR",
+    )
+    fzli_group.add_argument(
+        "--differential",
+        action="store_true",
+        help="Enable differential mode",
     )
 
     libf_group.add_argument(
@@ -375,15 +406,7 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         help="AFL input directory with test cases. (applies to Nyx)",
         metavar="DIR",
     )
-    afl_group.add_argument(
-        "--corpus-out",
-        "-o",
-        type=Path,
-        help="AFL output directory for findings. (applies to Nyx)",
-        metavar="DIR",
-    )
     afl_group.add_argument("--afl-timeout", type=int, help=SUPPRESS)
-    afl_group.add_argument("rargs", nargs=REMAINDER)
 
     if not argv:
         parser.print_help(sys.stderr)
@@ -494,6 +517,16 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         parser.error("--max-runtime must be positive (or 0 to disable).")
     elif opts.max_runtime == 0.0:
         opts.max_runtime = float("inf")
+
+    if opts.mode == "fuzzilli":
+        if not opts.rargs or not Path(opts.rargs[0]).is_file():
+            parser.error("Fuzzilli mode expects at least one arg (target binary)")
+        if not opts.fuzzilli_build_dir:
+            parser.error("Must specify --build-dir for Fuzzilli mode")
+        if not opts.corpus_refresh:
+            if not opts.corpus_out:
+                # don't check existence, main() will auto-create
+                parser.error("Must specify --corpus-out with --fuzzilli")
 
     if opts.mode == "libfuzzer" and not opts.rargs:
         parser.error("No arguments specified")
