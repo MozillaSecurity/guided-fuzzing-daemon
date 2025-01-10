@@ -197,9 +197,6 @@ def afl_main(
         for inst in range(1, opts.instances)
     )
 
-    if opts.max_runtime == 0.0:
-        opts.max_runtime = float("inf")
-
     start = last_queue_upload = last_stats_report = time()
     last_afl_start = 0.0
     base_cfg = ProgramConfiguration.fromBinary(binary)

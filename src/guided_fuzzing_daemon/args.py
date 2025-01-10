@@ -489,8 +489,11 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
             parser.error(
                 "--afl-hide-logs requires --afl-log-pattern or --nyx-log-pattern"
             )
-        if opts.max_runtime < 0:
-            parser.error("--max-runtime must be positive (or 0 to disable).")
+
+    if opts.max_runtime < 0.0:
+        parser.error("--max-runtime must be positive (or 0 to disable).")
+    elif opts.max_runtime == 0.0:
+        opts.max_runtime = float("inf")
 
     if opts.mode == "libfuzzer" and not opts.rargs:
         parser.error("No arguments specified")
