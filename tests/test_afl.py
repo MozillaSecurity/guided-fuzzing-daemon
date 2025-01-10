@@ -119,7 +119,7 @@ def afl_common(mocker, tmp_path):
             self.args.env = None
             self.args.env_percent = None
             self.args.instances = 1
-            self.args.max_runtime = 0.0
+            self.args.max_runtime = float("inf")
             self.args.metadata = []
             self.args.project = "project"
             self.args.provider = "test"
