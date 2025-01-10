@@ -42,6 +42,8 @@ def nyx_main(
     assert ASAN_SYMBOLIZE is not None
     assert not opts.rargs, "--nyx takes no positional args"
 
+    timeout = opts.timeout or 1000
+
     config_file = opts.sharedir / "config.sh"
 
     if opts.corpus_refresh:
@@ -68,7 +70,7 @@ def nyx_main(
                 "-o",
                 str(merger.updated_tests_dir),
                 "-t",
-                str(opts.afl_timeout),
+                str(timeout),
                 "-m",
                 "none",
                 "-X",
@@ -204,7 +206,7 @@ def nyx_main(
                         [
                             str(afl_fuzz),
                             "-t",
-                            str(opts.afl_timeout),
+                            str(timeout),
                             "-Y",
                             *cmd,
                             "-i",

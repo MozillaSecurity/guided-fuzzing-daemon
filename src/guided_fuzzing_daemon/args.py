@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import re
 import sys
-from argparse import REMAINDER, ArgumentParser, Namespace
+from argparse import REMAINDER, SUPPRESS, ArgumentParser, Namespace
+from logging import getLogger
 from pathlib import Path
 from shutil import which
+
+LOG = getLogger("gfd.args")
 
 
 def _check_log_pattern(
@@ -125,6 +128,12 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         default=1,
         help="Number of parallel instances to run",
         metavar="COUNT",
+    )
+    main_group.add_argument(
+        "--timeout",
+        type=int,
+        help="Timeout per test (applies to AFL, Nyx)",
+        metavar="MSECS",
     )
 
     storage_group.add_argument(
@@ -322,13 +331,6 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         metavar="FILE",
     )
     afl_group.add_argument(
-        "--afl-timeout",
-        type=int,
-        default=1000,
-        help="Timeout per test to pass to AFL for corpus refreshing. (applies to Nyx)",
-        metavar="MSECS",
-    )
-    afl_group.add_argument(
         "--memory-limit",
         "-m",
         help="Set memory limit for child process",
@@ -380,6 +382,7 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         help="AFL output directory for findings. (applies to Nyx)",
         metavar="DIR",
     )
+    afl_group.add_argument("--afl-timeout", type=int, help=SUPPRESS)
     afl_group.add_argument("rargs", nargs=REMAINDER)
 
     if not argv:
@@ -445,6 +448,11 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
                 parser.error(f"Total probabilities for --env-percent {key} > 100")
             result[key][value] = pct
         opts.env_percent = result
+
+    if opts.afl_timeout is not None:
+        LOG.warning("--afl-timeout is deprecated, use --timeout instead")
+        assert opts.timeout is None
+        opts.timeout = opts.afl_timeout
 
     if opts.mode == "nyx":
         if opts.rargs:

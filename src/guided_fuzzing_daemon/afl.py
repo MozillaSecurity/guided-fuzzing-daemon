@@ -138,6 +138,8 @@ def afl_main(
     binary = Path(opts.rargs[0]).resolve()
     assert binary.is_file()
 
+    timeout = opts.timeout or 1000
+
     if opts.corpus_refresh:
         # Run afl-cmin
         afl_cmin = Path(opts.aflbindir) / "afl-cmin"
@@ -157,7 +159,7 @@ def afl_main(
                 "-o",
                 str(merger.updated_tests_dir),
                 "-t",
-                str(opts.afl_timeout),
+                str(timeout),
                 "-m",
                 "none",
                 str(binary),
@@ -316,7 +318,7 @@ def afl_main(
                         [
                             str(afl_fuzz),
                             "-t",
-                            str(opts.afl_timeout),
+                            str(timeout),
                             *cmd,
                             "-i",
                             str(

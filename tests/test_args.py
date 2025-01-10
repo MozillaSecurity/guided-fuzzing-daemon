@@ -290,3 +290,12 @@ def test_args_09(args, capsys, error):
         parse_args(["gfd", *args])
     stdio = capsys.readouterr()
     assert error in stdio.err
+
+
+def test_args_10(caplog):
+    """test --afl-timeout deprecation"""
+    args = parse_args(["gfd", "--afl-timeout=10"])
+    assert any(
+        "afl-timeout is deprecated" in record.message for record in caplog.records
+    )
+    assert args.timeout == 10
