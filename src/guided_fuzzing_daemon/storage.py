@@ -519,6 +519,7 @@ class CorpusRefreshContext:
         self,
         opts: Namespace,
         storage: CloudStorageProvider,
+        subdir: str | None = None,
         extra_files: Iterable[Path] = (),
     ) -> None:
         self.project = opts.project
@@ -542,6 +543,7 @@ class CorpusRefreshContext:
         if self.updated_tests_dir.exists():
             rmtree(self.updated_tests_dir)
         self.updated_tests_dir.mkdir()
+        self.output_subdir = subdir
 
         try:
             queue_downloader = CorpusSyncer(
@@ -581,14 +583,18 @@ class CorpusRefreshContext:
                 self.refresh_stats.write_file(self.stats, [])
             raise
 
+        updated_tests_dir = self.updated_tests_dir
+        if self.output_subdir is not None:
+            updated_tests_dir = updated_tests_dir / self.output_subdir
+
         self.refresh_stats.fields["corpus_post"].update(
-            sum(1 for _ in self.updated_tests_dir.iterdir())
+            sum(1 for _ in updated_tests_dir.iterdir())
         )
 
         if self.stats:
             self.refresh_stats.write_file(self.stats, [])
 
-        if not any(self.updated_tests_dir.iterdir()):
+        if not any(updated_tests_dir.iterdir()):
             LOG.error("error: Merge returned empty result, refusing to upload.")
             self.exit_code = 2
             return
@@ -596,7 +602,7 @@ class CorpusRefreshContext:
         # replace existing corpus with reduced corpus
         LOG.info("Uploading reduced corpus to %s/corpus/", self.cloud_path)
         corpus_uploader = CorpusSyncer(
-            self.storage, Corpus(self.updated_tests_dir), self.project
+            self.storage, Corpus(updated_tests_dir), self.project
         )
         corpus_uploader.upload_corpus(delete_existing=True)
         for extra in self.extra_files:

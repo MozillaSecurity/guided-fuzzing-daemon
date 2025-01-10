@@ -22,6 +22,7 @@ from Collector.Collector import Collector
 
 from .afl import afl_main
 from .args import parse_args
+from .fuzzilli import main as fuzzilli_main
 from .libfuzzer import libfuzzer_main
 from .nyx import nyx_main
 from .storage import (
@@ -120,6 +121,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if opts.mode == "afl":
         return afl_main(opts, collector, storage)
+
+    if opts.mode == "fuzzilli":
+        return fuzzilli_main(opts, collector, storage)
 
     if opts.mode == "libfuzzer":
         return libfuzzer_main(opts, collector, storage)

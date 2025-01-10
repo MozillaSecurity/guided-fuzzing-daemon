@@ -53,7 +53,7 @@ def nyx_main(
             LOG.error("error: Unable to locate afl-cmin binary.")
             return 2
 
-        with CorpusRefreshContext(opts, storage, [config_file]) as merger:
+        with CorpusRefreshContext(opts, storage, extra_files=[config_file]) as merger:
             # Copy config.sh to sharedir
             if not (merger.queues_dir / "config.sh").exists():
                 raise RuntimeError(

@@ -14,6 +14,10 @@ from guided_fuzzing_daemon.args import parse_args
     (
         pytest.param([], "usage: gfd ", id="empty"),
         pytest.param(["--libfuzzer"], "No arguments", id="libfuzzer"),
+        pytest.param(["--afl"], "AFL mode expects at least one arg", id="afl"),
+        pytest.param(
+            ["--fuzzilli"], "Fuzzilli mode expects at least one arg", id="fuzzilli"
+        ),
         pytest.param(
             ["--libfuzzer-auto-reduce=0"], "Auto reduce threshold", id="lf-auto-reduce"
         ),
@@ -165,12 +169,32 @@ def test_args_03(args, capsys, mocker, mode, msg, tmp_path):
     assert msg in stdio.err
 
 
-def test_args_04(capsys):
-    """misc afl args"""
+@pytest.mark.parametrize(
+    "args, msg",
+    (
+        pytest.param(
+            ["--fuzzilli", "--build-dir", "tmp", "tmp/file"],
+            "specify --corpus-out",
+            id="wo-corpus-out",
+        ),
+        pytest.param(
+            ["--fuzzilli", "--corpus-out", "tmp", "tmp/file"],
+            "specify --build-dir",
+            id="wo-build-dir",
+        ),
+    ),
+)
+def test_args_04(args, capsys, msg, tmp_path):
+    """test fuzzilli args"""
+    (tmp_path / "file").touch()
+    args = [
+        {"tmp": str(tmp_path), "tmp/file": str(tmp_path / "file")}.get(arg, arg)
+        for arg in args
+    ]
     with pytest.raises(SystemExit):
-        parse_args(["gfd", "--afl"])
+        parse_args(["gfd", *args])
     stdio = capsys.readouterr()
-    assert "AFL mode expects at least one arg" in stdio.err
+    assert msg in stdio.err
 
 
 @pytest.mark.parametrize(
