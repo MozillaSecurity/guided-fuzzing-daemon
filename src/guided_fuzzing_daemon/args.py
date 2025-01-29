@@ -176,6 +176,12 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         help="Display cloud storage queue status",
     )
     storage_group.add_argument(
+        "--queue-download",
+        type=Path,
+        help="Use cloud storage to download the queues for the specified project",
+        metavar="DIR",
+    )
+    storage_group.add_argument(
         "--corpus-download",
         type=Path,
         help="Use cloud storage to download the test corpus for the specified project",
@@ -428,6 +434,7 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         or opts.corpus_status
         or opts.corpus_upload
         or opts.list_projects
+        or opts.queue_download
         or opts.queue_status
     )
     if (
