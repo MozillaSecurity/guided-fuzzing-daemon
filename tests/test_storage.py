@@ -548,6 +548,7 @@ def test_s3file_03(s3file, stubber, tmp_path):
             # We don't strictly match the Body since boto3 wraps it in ReadFileChunk
             "Body": ANY,
             "Bucket": "test-bucket",
+            "ChecksumAlgorithm": "CRC32",
             "Key": "test_file.txt",
         },
     )
