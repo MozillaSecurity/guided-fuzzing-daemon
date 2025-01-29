@@ -12,6 +12,7 @@ S3_ARGS = frozenset(
         "corpus_status",
         "corpus_upload",
         "list_projects",
+        "queue_download",
         "queue_status",
     )
 )
@@ -45,6 +46,8 @@ def test_main_01(arg, mocker, tmp_path):
         assert syncer.upload_corpus.called
     elif arg == "list_projects":
         assert storage.iter_projects.called
+    elif arg == "queue_download":
+        assert syncer.download_queues.called
     elif arg == "queue_status":
         assert storage.get_queue_status.called
 

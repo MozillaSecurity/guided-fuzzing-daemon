@@ -89,6 +89,11 @@ def main(argv: list[str] | None = None) -> int:
             LOG.info(project)
         return 0
 
+    if opts.queue_download:
+        syncer = CorpusSyncer(storage, Corpus(opts.queue_download), opts.project)
+        syncer.download_queues()
+        return 0
+
     if opts.queue_status:
         status_data = storage.get_queue_status(opts.project)
         total_queue_files = 0
