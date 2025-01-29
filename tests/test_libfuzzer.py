@@ -43,7 +43,7 @@ def libfuzzer_common(mocker, tmp_path):
         popen = mocker.patch("guided_fuzzing_daemon.libfuzzer.Popen")
         queue = mocker.patch("guided_fuzzing_daemon.libfuzzer.Queue")
         mocker.patch("guided_fuzzing_daemon.libfuzzer.run")
-        s3m = mocker.Mock(spec=CloudStorageProvider)
+        s3m = mocker.MagicMock(spec=CloudStorageProvider)
         s3m.iter.side_effect = iter_impl
         mocker.patch("guided_fuzzing_daemon.libfuzzer.sleep")
         writer = mocker.patch("guided_fuzzing_daemon.libfuzzer.LibFuzzerStats")
