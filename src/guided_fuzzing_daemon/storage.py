@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import tempfile
+import zipfile
 from abc import ABC, abstractmethod
 from argparse import Namespace
 from dataclasses import dataclass
@@ -439,26 +441,40 @@ class CorpusSyncer:
         # upload new files
         uploaded = 0
         errors = 0
-        with Executor() as executor:
-            for queue in [self.corpus, *self.extra_queues]:
-                if not queue.path.is_dir():
-                    continue
-                for testcase in queue.path.iterdir():
-                    try:
-                        hash_name = hashlib.sha1(testcase.read_bytes()).hexdigest()
-                    except FileNotFoundError:
-                        LOG.error("-> file gone before we could hash it: %s", testcase)
-                        errors += 1
+
+        # Create a temporary ZIP file
+        temp_dir = Path(tempfile.mkdtemp(prefix="gfd-"))
+        zip_path = temp_dir / f"{self.corpus.uuid}.zip"
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zfp:
+                for queue in [self.corpus, *self.extra_queues]:
+                    if not queue.path.is_dir():
                         continue
-                    except IsADirectoryError:
-                        LOG.error("-> directory detected in corpus: %s", testcase)
-                        errors += 1
-                        continue
-                    if hash_name not in existing:
-                        existing.add(hash_name)
-                        remote_obj = self.provider[prefix / hash_name]
-                        executor.submit(remote_obj.upload_from_file, testcase, True)
-                        uploaded += 1
+                    for testcase in queue.path.iterdir():
+                        try:
+                            hash_name = hashlib.sha1(testcase.read_bytes()).hexdigest()
+                        except FileNotFoundError:
+                            LOG.error(
+                                "-> file gone before we could hash it: %s", testcase
+                            )
+                            errors += 1
+                            continue
+                        except IsADirectoryError:
+                            LOG.error("-> directory detected in corpus: %s", testcase)
+                            errors += 1
+                            continue
+
+                        if hash_name not in existing:
+                            existing.add(hash_name)
+                            zfp.write(testcase, arcname=testcase.name)
+                            uploaded += 1
+
+            remote_obj = self.provider[prefix / f"{self.corpus.uuid}.zip"]
+            remote_obj.upload_from_file(zip_path, True)
+            LOG.info("Uploaded ZIP: %s", zip_path)
+        finally:
+            rmtree(temp_dir)
+
         LOG.info(
             "upload_to_queue() -> before=%d, new=%d, after=%d, errors=%d (%.03fs)",
             old_corpus_size,
@@ -503,9 +519,23 @@ class CorpusSyncer:
                 else:
                     executor.submit(file.download_to_file, out_path)
                     downloaded += 1
+
+        extracted = 0
+        for zip_file in self.corpus.path.glob("*.zip"):
+            with zipfile.ZipFile(zip_file, "r") as zf:
+                for file_name in zf.namelist():
+                    extracted_path = self.corpus.path / file_name
+                    if extracted_path.exists():
+                        dupes += 1
+                    else:
+                        zf.extract(file_name, self.corpus.path)
+                        extracted += 1
+            zip_file.unlink()
+
         LOG.info(
-            "download_queues() -> downloaded=%d, skipped=%d (%.03fs)",
+            "download_queues() -> downloaded=%d, extracted=%d, skipped=%d (%.03fs)",
             downloaded,
+            extracted,
             dupes,
             perf_counter() - start,
         )
