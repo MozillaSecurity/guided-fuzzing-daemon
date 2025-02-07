@@ -522,8 +522,11 @@ class CorpusSyncer:
 
         extracted = 0
         for zip_file in self.corpus.path.glob("*.zip"):
+            queue_name = zip_file.stem
+            assert queue_name in status_data
             with zipfile.ZipFile(zip_file, "r") as zf:
                 for file_name in zf.namelist():
+                    status_data[queue_name] += 1
                     extracted_path = self.corpus.path / file_name
                     if extracted_path.exists():
                         dupes += 1
@@ -531,6 +534,7 @@ class CorpusSyncer:
                         zf.extract(file_name, self.corpus.path)
                         extracted += 1
             zip_file.unlink()
+            status_data[queue_name] -= 1
 
         LOG.info(
             "download_queues() -> downloaded=%d, extracted=%d, skipped=%d (%.03fs)",
