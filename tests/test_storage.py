@@ -881,7 +881,7 @@ def test_syncer_06(mocker, tmp_path):
     f4.download_to_file.side_effect = _write_path
 
     # Mock ZIP file
-    zip_path = PurePosixPath("t_proj/queues/b/archive.zip")
+    zip_path = PurePosixPath("t_proj/queues/b/b.zip")
     f5 = mocker.Mock(spec=CloudStorageFile, path=zip_path)
 
     def _write_zip(dest):
@@ -904,8 +904,8 @@ def test_syncer_06(mocker, tmp_path):
 
     assert f5.download_to_file.call_count == 1
 
-    # Counts file total and in the case of a zip, the file count of the archive
-    assert result == {"a": 2, "b": 3}
+    # Counts file total and in the case of a zip, the file count within the archive
+    assert result == {"a": 2, "b": 4}
     assert {f.name for f in tmp_path.iterdir()} == {"61", "62", "63", "64"}
 
 
