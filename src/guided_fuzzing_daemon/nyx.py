@@ -9,7 +9,7 @@ from logging import getLogger
 from pathlib import Path, PurePosixPath
 from random import choice
 from shutil import copy, move, rmtree, which
-from subprocess import DEVNULL, STDOUT, Popen, TimeoutExpired, run
+from subprocess import STDOUT, Popen, TimeoutExpired, run
 from tempfile import mkdtemp
 from time import sleep, time
 
@@ -46,6 +46,9 @@ def nyx_main(
 
     config_file = opts.sharedir / "config.sh"
 
+    log_tee = LogTee(opts.afl_hide_logs, opts.instances)
+    tmp_base = Path(mkdtemp(prefix="gfd-"))
+
     if opts.corpus_refresh:
         # Run afl-cmin
         afl_cmin = Path(opts.aflbindir) / "afl-cmin"
@@ -62,6 +65,25 @@ def nyx_main(
 
             move(merger.queues_dir / "config.sh", config_file)
 
+            if opts.afl_log_pattern:
+                if "%" in opts.afl_log_pattern:
+                    # pylint: disable=consider-using-with
+                    log_tee.append(
+                        open(opts.afl_log_pattern % (0,), "w", encoding="utf-8")
+                    )
+                else:
+                    # pylint: disable=consider-using-with
+                    log_tee.append(open(opts.afl_log_pattern, "w", encoding="utf-8"))
+            else:
+                log_tee.append((tmp_base / "screen0.log").open("w"))
+
+            env = os.environ.copy()
+            if opts.nyx_log_pattern:
+                if "%" in opts.nyx_log_pattern:
+                    env["AFL_NYX_LOG"] = opts.nyx_log_pattern % (0,)
+                else:
+                    env["AFL_NYX_LOG"] = opts.nyx_log_pattern
+
             afl_cmdline = [
                 str(afl_cmin),
                 "-e",
@@ -77,20 +99,30 @@ def nyx_main(
                 str(opts.sharedir),
             ]
 
-            LOG.info("Running afl-cmin")
-            # pylint: disable=consider-using-with
-            proc: Popen[str] | None = Popen(
-                afl_cmdline, stdout=None if opts.debug else DEVNULL, text=True
-            )
-            last_stats_report = 0.0
-            assert proc is not None
-            while proc.poll() is None:
-                # Calculate stats
-                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
-                    merger.refresh_stats.write_file(opts.stats, [])
-                    last_stats_report = time()
-                sleep(0.1)
-            assert not proc.wait()
+            try:
+
+                LOG.info("Running afl-cmin")
+                # pylint: disable=consider-using-with
+                proc: Popen[str] | None = Popen(
+                    afl_cmdline,
+                    env=env,
+                    stderr=STDOUT,
+                    stdout=log_tee.open_files[0].handle,
+                    text=True,
+                )
+
+                last_stats_report = 0.0
+                assert proc is not None
+                while proc.poll() is None:
+                    # Calculate stats
+                    if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
+                        merger.refresh_stats.write_file(opts.stats, [])
+                        last_stats_report = time()
+                    sleep(0.1)
+                assert not proc.wait()
+                log_tee.print()
+            finally:
+                log_tee.close()
 
         assert merger.exit_code is not None
         return merger.exit_code
@@ -140,10 +172,8 @@ def nyx_main(
     warn_local(opts)
 
     procs: list[Popen[str] | None] = [None] * opts.instances
-    log_tee = LogTee(opts.afl_hide_logs, opts.instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
-    tmp_base = Path(mkdtemp(prefix="gfd-"))
     try:
         for idx in range(opts.instances):
             if opts.afl_log_pattern:
