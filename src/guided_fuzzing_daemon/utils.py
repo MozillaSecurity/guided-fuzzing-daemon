@@ -9,7 +9,7 @@ import tempfile
 import time
 import zipfile
 from argparse import Namespace
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from copy import copy
@@ -17,7 +17,7 @@ from math import log10
 from pathlib import Path
 from random import uniform
 from re import Match, Pattern
-from typing import Iterable, Iterator, TextIO, TypeVar
+from typing import TextIO, TypeVar
 
 from FTB.ProgramConfiguration import ProgramConfiguration
 
@@ -276,3 +276,22 @@ class LogTee:
             if not self.hide:
                 open_file.print(flush=True)
             open_file.handle.close()
+
+
+def open_log_handle(pattern: str | None, tmp_base: Path, idx: int) -> TextIO:
+    """
+    Helper function for creating a log handle for the given index.
+
+    Arguments:
+        pattern: Log file pattern, possibly containing '%'.
+        tmp_base: Temporary directory fallback.
+        idx: Index of the instance.
+
+    Returns:
+        A writable text-mode file handle.
+    """
+    if pattern:
+        if "%" in pattern:
+            return open(pattern % idx, "w", encoding="utf-8", buffering=1)
+        return open(pattern, "w", encoding="utf-8", buffering=1)
+    return (tmp_base / f"screen{idx}.log").open("w", encoding="utf-8", buffering=1)
