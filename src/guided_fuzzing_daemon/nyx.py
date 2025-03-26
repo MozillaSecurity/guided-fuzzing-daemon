@@ -26,7 +26,7 @@ from .storage import (
     CorpusRefreshContext,
     CorpusSyncer,
 )
-from .utils import LogTee, create_envs, warn_local
+from .utils import LogTee, create_envs, open_log_handle, warn_local
 
 ASAN_SYMBOLIZE = which("asan_symbolize")
 LOG = getLogger("gfd.nyx")
@@ -65,17 +65,7 @@ def nyx_main(
 
             move(merger.queues_dir / "config.sh", config_file)
 
-            if opts.afl_log_pattern:
-                if "%" in opts.afl_log_pattern:
-                    # pylint: disable=consider-using-with
-                    log_tee.append(
-                        open(opts.afl_log_pattern % (0,), "w", encoding="utf-8")
-                    )
-                else:
-                    # pylint: disable=consider-using-with
-                    log_tee.append(open(opts.afl_log_pattern, "w", encoding="utf-8"))
-            else:
-                log_tee.append((tmp_base / "screen0.log").open("w"))
+            log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, 0))
 
             env = os.environ.copy()
             if opts.nyx_log_pattern:
@@ -176,17 +166,7 @@ def nyx_main(
     afl_fuzz = opts.aflbindir / "afl-fuzz"
     try:
         for idx in range(opts.instances):
-            if opts.afl_log_pattern:
-                if "%" in opts.afl_log_pattern:
-                    # pylint: disable=consider-using-with
-                    log_tee.append(
-                        open(opts.afl_log_pattern % (idx,), "w", encoding="utf-8")
-                    )
-                else:
-                    # pylint: disable=consider-using-with
-                    log_tee.append(open(opts.afl_log_pattern, "w", encoding="utf-8"))
-            else:
-                log_tee.append((tmp_base / f"screen{idx}.log").open("w"))
+            log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, idx))
 
         seed = choice([inp for inp in opts.corpus_in.iterdir() if inp.is_file()])
         corpus_seed = tmp_base / "corpus_seed"

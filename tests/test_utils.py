@@ -2,16 +2,25 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+from __future__ import annotations
+
 import re
 import sys
 from collections import OrderedDict
+from pathlib import Path
 from threading import Lock
 from time import sleep
 
 import pytest
 from FTB.ProgramConfiguration import ProgramConfiguration
 
-from guided_fuzzing_daemon.utils import Executor, LogFile, LogTee, create_envs
+from guided_fuzzing_daemon.utils import (
+    Executor,
+    LogFile,
+    LogTee,
+    create_envs,
+    open_log_handle,
+)
 
 
 def test_create_envs(mocker):
@@ -250,3 +259,18 @@ def test_logtee_2(mocker, tmp_path):
             mocker.call(flush=True),
         ]
         assert lf0.handle.close.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "pattern, idx, expected",
+    [
+        ("log%d.txt", 3, "log3.txt"),
+        ("fixed.log", 0, "fixed.log"),
+        (None, 2, "screen2.log"),
+    ],
+)
+def test_open_log_handle(tmp_path: Path, pattern: str | None, idx: int, expected: str):
+    full_pattern = str(tmp_path / pattern) if pattern else None
+    f = open_log_handle(full_pattern, tmp_path, idx)
+    assert Path(f.name).name == expected
+    f.close()
