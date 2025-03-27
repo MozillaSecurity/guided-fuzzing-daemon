@@ -113,6 +113,7 @@ def nyx_main(
                 log_tee.print()
             finally:
                 log_tee.close()
+                rmtree(tmp_base)
 
         assert merger.exit_code is not None
         return merger.exit_code
