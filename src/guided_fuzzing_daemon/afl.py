@@ -37,7 +37,7 @@ from .storage import (
     CorpusRefreshContext,
     CorpusSyncer,
 )
-from .utils import LogTee, create_envs, warn_local
+from .utils import LogTee, create_envs, open_log_handle, warn_local
 
 LOG = getLogger("gfd.afl")
 POWER_SCHEDS = ("explore", "coe", "lin", "quad", "exploit", "rare")
@@ -140,6 +140,9 @@ def afl_main(
 
     timeout = opts.timeout or 1000
 
+    log_tee = LogTee(opts.afl_hide_logs, opts.instances)
+    tmp_base = Path(mkdtemp(prefix="gfd-"))
+
     if opts.corpus_refresh:
         # Run afl-cmin
         afl_cmin = Path(opts.aflbindir) / "afl-cmin"
@@ -150,6 +153,8 @@ def afl_main(
         with CorpusRefreshContext(opts, storage) as merger:
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = f"{binary.parent / 'gtest'}:{binary.parent}"
+
+            log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, 0))
 
             afl_cmdline = [
                 str(afl_cmin),
@@ -165,20 +170,28 @@ def afl_main(
                 str(binary),
             ]
 
-            LOG.info("Running afl-cmin")
-            # pylint: disable=consider-using-with
-            proc: Popen[str] | None = Popen(
-                afl_cmdline, stdout=None if opts.debug else DEVNULL, text=True, env=env
-            )
-            last_stats_report = 0.0
-            assert proc is not None
-            while proc.poll() is None:
-                # Calculate stats
-                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
-                    merger.refresh_stats.write_file(opts.stats, [])
-                    last_stats_report = time()
-                sleep(0.1)
-            assert not proc.wait()
+            try:
+                LOG.info("Running afl-cmin")
+                # pylint: disable=consider-using-with
+                proc: Popen[str] | None = Popen(
+                    afl_cmdline,
+                    stdout=None if opts.debug else DEVNULL,
+                    text=True,
+                    env=env,
+                )
+                last_stats_report = 0.0
+                assert proc is not None
+                while proc.poll() is None:
+                    # Calculate stats
+                    if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
+                        merger.refresh_stats.write_file(opts.stats, [])
+                        last_stats_report = time()
+                    sleep(0.1)
+                assert not proc.wait()
+                log_tee.print()
+            finally:
+                log_tee.close()
+                rmtree(tmp_base)
 
         assert merger.exit_code is not None
         return merger.exit_code
@@ -238,20 +251,10 @@ def afl_main(
     original_corpus = {item.name for item in opts.corpus_in.iterdir()}
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
-    tmp_base = Path(mkdtemp(prefix="gfd-"))
+
     try:
         for idx in range(opts.instances):
-            if opts.afl_log_pattern:
-                if "%" in opts.afl_log_pattern:
-                    # pylint: disable=consider-using-with
-                    log_tee.append(
-                        open(opts.afl_log_pattern % (idx,), "w", encoding="utf-8")
-                    )
-                else:
-                    # pylint: disable=consider-using-with
-                    log_tee.append(open(opts.afl_log_pattern, "w", encoding="utf-8"))
-            else:
-                log_tee.append((tmp_base / f"screen{idx}.log").open("w"))
+            log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, idx))
 
         seed = choice([inp for inp in opts.corpus_in.iterdir() if inp.is_file()])
         corpus_seed = tmp_base / "corpus_seed"
