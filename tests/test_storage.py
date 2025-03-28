@@ -804,12 +804,10 @@ def test_syncer_04(mocker, skip_hashes, tmp_path):
 
     # Create separate path for building the zipfile
     (work_dir := tmp_path / "temp").mkdir(parents=True, exist_ok=True)
-    mocker.patch(
-        "guided_fuzzing_daemon.storage.tempfile.mkdtemp", return_value=str(work_dir)
-    )
+    mocker.patch("guided_fuzzing_daemon.utils.mkdtemp", return_value=str(work_dir))
 
     # Prevent cleaning the tmpdir
-    mocker.patch("guided_fuzzing_daemon.storage.rmtree")
+    mocker.patch("guided_fuzzing_daemon.utils.rmtree")
 
     zip_name = f"{corpus.uuid}.zip"
     zip_path = work_dir / zip_name
@@ -942,12 +940,10 @@ def test_syncer_07(mocker, skip_hashes, tmp_path):
     storage.iter.side_effect = [(f1,)]
 
     # Patch mkdtemp to ensure zip file is created inside tmp_path
-    mocker.patch(
-        "guided_fuzzing_daemon.storage.tempfile.mkdtemp", return_value=str(tmp_path)
-    )
+    mocker.patch("guided_fuzzing_daemon.utils.mkdtemp", return_value=str(tmp_path))
 
     # Prevent cleaning the tmpdir
-    mocker.patch("guided_fuzzing_daemon.storage.rmtree")
+    mocker.patch("guided_fuzzing_daemon.utils.rmtree")
 
     # Prevent the zip file from being deleted before checking contents
     mocker.patch("guided_fuzzing_daemon.storage.Path.unlink", autospec=True)

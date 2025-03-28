@@ -160,7 +160,7 @@ def nyx_main(
     log_tee = LogTee(opts.afl_hide_logs, opts.instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
-    tmp_base = TempPath()
+    tmp_base = TempPath().path
     try:
         for idx in range(opts.instances):
             log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, idx))

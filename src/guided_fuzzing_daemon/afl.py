@@ -247,7 +247,7 @@ def afl_main(
     original_corpus = {item.name for item in opts.corpus_in.iterdir()}
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
-    tmp_base = TempPath()
+    tmp_base = TempPath().path
 
     try:
         for idx in range(opts.instances):
