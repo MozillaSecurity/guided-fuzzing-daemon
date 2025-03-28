@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tempfile
 import time
 import zipfile
 from argparse import Namespace
@@ -18,6 +17,7 @@ from pathlib import Path
 from random import uniform
 from re import Match, Pattern
 from shutil import rmtree
+from tempfile import mkdtemp
 from typing import Any, TextIO, TypeVar
 
 from FTB.ProgramConfiguration import ProgramConfiguration
@@ -39,7 +39,7 @@ def apply_transform(script_path: Path, testcase_path: Path) -> Path:
         Path to the archive containing the original and transformed testcase
     """
 
-    with tempfile.TemporaryDirectory() as output_path:
+    with TempPath() as output_path:
         try:
             subprocess.run(
                 [str(script_path), str(testcase_path), output_path], check=True
@@ -49,7 +49,7 @@ def apply_transform(script_path: Path, testcase_path: Path) -> Path:
                 "Failed to apply post crash transformation.  Aborting..."
             ) from exc
 
-        if not any(Path(output_path).iterdir()):
+        if not any(output_path.iterdir()):
             raise RuntimeError(
                 "Transformation script did not generate any files.  Aborting..."
             )
@@ -57,7 +57,7 @@ def apply_transform(script_path: Path, testcase_path: Path) -> Path:
         archive_path = f"{testcase_path}.zip"
         with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(str(testcase_path), Path(testcase_path).name)
-            for file in Path(output_path).rglob("*.*"):
+            for file in output_path.rglob("*.*"):
                 archive.write(str(file), arcname=file.relative_to(output_path))
 
     return Path(archive_path)
@@ -288,7 +288,7 @@ class LogTee:
 class TempPath(Path):
 
     def __init__(self) -> None:
-        super().__init__(tempfile.mkdtemp(prefix="gfd-"))  # type: ignore[call-arg]
+        super().__init__(mkdtemp(prefix="gfd-"))  # type: ignore[call-arg]
 
     def __enter__(self) -> TempPath:
         return self

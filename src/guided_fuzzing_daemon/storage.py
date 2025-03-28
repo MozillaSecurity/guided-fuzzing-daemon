@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import sys
-import tempfile
 import zipfile
 from abc import ABC, abstractmethod
 from argparse import Namespace
@@ -24,7 +23,7 @@ import botocore
 from google.cloud import storage as gcp_storage
 
 from .stats import GeneratedField, StatAggregator
-from .utils import Executor
+from .utils import Executor, TempPath
 
 if sys.version_info[:2] < (3, 12):
     from .utils import batched
@@ -443,9 +442,8 @@ class CorpusSyncer:
         errors = 0
 
         # Create a temporary ZIP file
-        temp_dir = Path(tempfile.mkdtemp(prefix="gfd-"))
-        zip_path = temp_dir / f"{self.corpus.uuid}.zip"
-        try:
+        with TempPath() as temp_dir:
+            zip_path = temp_dir / f"{self.corpus.uuid}.zip"
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zfp:
                 for queue in [self.corpus, *self.extra_queues]:
                     if not queue.path.is_dir():
@@ -472,8 +470,6 @@ class CorpusSyncer:
             remote_obj = self.provider[prefix / f"{self.corpus.uuid}.zip"]
             remote_obj.upload_from_file(zip_path, True)
             LOG.info("Uploaded ZIP: %s", zip_path)
-        finally:
-            rmtree(temp_dir)
 
         LOG.info(
             "upload_to_queue() -> before=%d, new=%d, after=%d, errors=%d (%.03fs)",

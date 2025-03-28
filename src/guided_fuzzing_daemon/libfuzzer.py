@@ -522,20 +522,27 @@ def libfuzzer_main(
                 # Filter out other stuff we don't want for merging
                 merge_cmdline = [x for x in merge_cmdline if not x.startswith("-dict=")]
 
-                new_corpus_dir = Path(mkdtemp(prefix="fm-libfuzzer-automerge-"))
-                merge_cmdline.extend(["-merge=1", str(new_corpus_dir), str(corpus_dir)])
-
-                LOG.info("Running automated merge...")
-                env = os.environ.copy()
-                env["LD_LIBRARY_PATH"] = str(Path(merge_cmdline[0]).parent)
-                LOG.debug("run(%r, env=%r)", merge_cmdline, env)
-                run(merge_cmdline, stdout=devnull, env=env, check=True)
-
-                if not any(new_corpus_dir.iterdir()):
-                    LOG.error(
-                        "error: Merge returned empty result, refusing to continue."
+                new_corpus_dir = Path(mkdtemp(prefix="gfd-"))
+                try:
+                    merge_cmdline.extend(
+                        ["-merge=1", str(new_corpus_dir), str(corpus_dir)]
                     )
-                    return 2
+
+                    LOG.info("Running automated merge...")
+                    env = os.environ.copy()
+                    env["LD_LIBRARY_PATH"] = str(Path(merge_cmdline[0]).parent)
+                    LOG.debug("run(%r, env=%r)", merge_cmdline, env)
+                    run(merge_cmdline, stdout=devnull, env=env, check=True)
+
+                    if not any(new_corpus_dir.iterdir()):
+                        LOG.error(
+                            "error: Merge returned empty result, refusing to continue."
+                        )
+                        return 2
+
+                except:
+                    rmtree(new_corpus_dir)
+                    raise
 
                 rmtree(str(corpus_dir))
                 move(str(new_corpus_dir), str(corpus_dir))
