@@ -10,8 +10,7 @@ from logging import getLogger
 from pathlib import Path
 from random import choice
 from shutil import copy, rmtree
-from subprocess import DEVNULL, STDOUT, Popen, TimeoutExpired
-from tempfile import mkdtemp
+from subprocess import STDOUT, Popen, TimeoutExpired
 from time import sleep, time
 
 from Collector.Collector import Collector
@@ -37,7 +36,7 @@ from .storage import (
     CorpusRefreshContext,
     CorpusSyncer,
 )
-from .utils import LogTee, create_envs, open_log_handle, warn_local
+from .utils import LogTee, TempPath, create_envs, open_log_handle, warn_local
 
 LOG = getLogger("gfd.afl")
 POWER_SCHEDS = ("explore", "coe", "lin", "quad", "exploit", "rare")
@@ -140,9 +139,6 @@ def afl_main(
 
     timeout = opts.timeout or 1000
 
-    log_tee = LogTee(opts.afl_hide_logs, opts.instances)
-    tmp_base = Path(mkdtemp(prefix="gfd-"))
-
     if opts.corpus_refresh:
         # Run afl-cmin
         afl_cmin = Path(opts.aflbindir) / "afl-cmin"
@@ -150,7 +146,11 @@ def afl_main(
             LOG.error("error: Unable to locate afl-cmin binary.")
             return 2
 
-        with CorpusRefreshContext(opts, storage) as merger:
+        with (
+            CorpusRefreshContext(opts, storage) as merger,
+            TempPath() as tmp_base,
+            LogTee(opts.afl_hide_logs, opts.instances) as log_tee,
+        ):
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = f"{binary.parent / 'gtest'}:{binary.parent}"
 
@@ -170,28 +170,24 @@ def afl_main(
                 str(binary),
             ]
 
-            try:
-                LOG.info("Running afl-cmin")
-                # pylint: disable=consider-using-with
-                proc: Popen[str] | None = Popen(
-                    afl_cmdline,
-                    stdout=None if opts.debug else DEVNULL,
-                    text=True,
-                    env=env,
-                )
-                last_stats_report = 0.0
-                assert proc is not None
-                while proc.poll() is None:
-                    # Calculate stats
-                    if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
-                        merger.refresh_stats.write_file(opts.stats, [])
-                        last_stats_report = time()
-                    sleep(0.1)
-                assert not proc.wait()
-                log_tee.print()
-            finally:
-                log_tee.close()
-                rmtree(tmp_base)
+            LOG.info("Running afl-cmin")
+            # pylint: disable=consider-using-with
+            proc: Popen[str] | None = Popen(
+                afl_cmdline,
+                stderr=STDOUT,
+                stdout=log_tee.open_files[0].handle,
+                text=True,
+                env=env,
+            )
+            last_stats_report = 0.0
+            assert proc is not None
+            while proc.poll() is None:
+                # Calculate stats
+                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
+                    merger.refresh_stats.write_file(opts.stats, [])
+                    last_stats_report = time()
+                sleep(0.1)
+            assert not proc.wait()
 
         assert merger.exit_code is not None
         return merger.exit_code
@@ -251,6 +247,7 @@ def afl_main(
     original_corpus = {item.name for item in opts.corpus_in.iterdir()}
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
+    tmp_base = TempPath()
 
     try:
         for idx in range(opts.instances):

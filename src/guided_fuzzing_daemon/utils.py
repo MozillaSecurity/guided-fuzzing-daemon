@@ -17,7 +17,8 @@ from math import log10
 from pathlib import Path
 from random import uniform
 from re import Match, Pattern
-from typing import TextIO, TypeVar
+from shutil import rmtree
+from typing import Any, TextIO, TypeVar
 
 from FTB.ProgramConfiguration import ProgramConfiguration
 
@@ -271,11 +272,29 @@ class LogTee:
             for open_file in self.open_files:
                 open_file.print()
 
+    def __enter__(self) -> LogTee:
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        self.close()
+
     def close(self) -> None:
         for open_file in self.open_files:
             if not self.hide:
                 open_file.print(flush=True)
             open_file.handle.close()
+
+
+class TempPath(Path):
+
+    def __init__(self) -> None:
+        super().__init__(tempfile.mkdtemp(prefix="gfd-"))  # type: ignore[call-arg]
+
+    def __enter__(self) -> TempPath:
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
+        rmtree(self)
 
 
 def open_log_handle(pattern: str | None, tmp_base: Path, idx: int) -> TextIO:
