@@ -285,16 +285,16 @@ class LogTee:
             open_file.handle.close()
 
 
-class TempPath(Path):
+class TempPath:
 
     def __init__(self) -> None:
-        super().__init__(mkdtemp(prefix="gfd-"))  # type: ignore[call-arg]
+        self.path = Path(mkdtemp(prefix="gfd-"))
 
-    def __enter__(self) -> TempPath:
-        return self
+    def __enter__(self) -> Path:
+        return self.path
 
     def __exit__(self, _exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
-        rmtree(self)
+        rmtree(self.path)
 
 
 def open_log_handle(pattern: str | None, tmp_base: Path, idx: int) -> TextIO:
