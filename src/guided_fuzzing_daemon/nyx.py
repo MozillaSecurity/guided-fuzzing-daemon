@@ -10,7 +10,6 @@ from pathlib import Path, PurePosixPath
 from random import choice
 from shutil import copy, move, rmtree, which
 from subprocess import STDOUT, Popen, TimeoutExpired, run
-from tempfile import mkdtemp
 from time import sleep, time
 
 from Collector.Collector import Collector
@@ -26,7 +25,7 @@ from .storage import (
     CorpusRefreshContext,
     CorpusSyncer,
 )
-from .utils import LogTee, create_envs, open_log_handle, warn_local
+from .utils import LogTee, TempPath, create_envs, open_log_handle, warn_local
 
 ASAN_SYMBOLIZE = which("asan_symbolize")
 LOG = getLogger("gfd.nyx")
@@ -46,9 +45,6 @@ def nyx_main(
 
     config_file = opts.sharedir / "config.sh"
 
-    log_tee = LogTee(opts.afl_hide_logs, opts.instances)
-    tmp_base = Path(mkdtemp(prefix="gfd-"))
-
     if opts.corpus_refresh:
         # Run afl-cmin
         afl_cmin = Path(opts.aflbindir) / "afl-cmin"
@@ -56,7 +52,11 @@ def nyx_main(
             LOG.error("error: Unable to locate afl-cmin binary.")
             return 2
 
-        with CorpusRefreshContext(opts, storage, extra_files=[config_file]) as merger:
+        with (
+            CorpusRefreshContext(opts, storage, extra_files=[config_file]) as merger,
+            TempPath() as tmp_base,
+            LogTee(opts.afl_hide_logs, opts.instances) as log_tee,
+        ):
             # Copy config.sh to sharedir
             if not (merger.queues_dir / "config.sh").exists():
                 raise RuntimeError(
@@ -89,31 +89,25 @@ def nyx_main(
                 str(opts.sharedir),
             ]
 
-            try:
+            LOG.info("Running afl-cmin")
+            # pylint: disable=consider-using-with
+            proc: Popen[str] | None = Popen(
+                afl_cmdline,
+                env=env,
+                stderr=STDOUT,
+                stdout=log_tee.open_files[0].handle,
+                text=True,
+            )
 
-                LOG.info("Running afl-cmin")
-                # pylint: disable=consider-using-with
-                proc: Popen[str] | None = Popen(
-                    afl_cmdline,
-                    env=env,
-                    stderr=STDOUT,
-                    stdout=log_tee.open_files[0].handle,
-                    text=True,
-                )
-
-                last_stats_report = 0.0
-                assert proc is not None
-                while proc.poll() is None:
-                    # Calculate stats
-                    if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
-                        merger.refresh_stats.write_file(opts.stats, [])
-                        last_stats_report = time()
-                    sleep(0.1)
-                assert not proc.wait()
-                log_tee.print()
-            finally:
-                log_tee.close()
-                rmtree(tmp_base)
+            last_stats_report = 0.0
+            assert proc is not None
+            while proc.poll() is None:
+                # Calculate stats
+                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
+                    merger.refresh_stats.write_file(opts.stats, [])
+                    last_stats_report = time()
+                sleep(0.1)
+            assert not proc.wait()
 
         assert merger.exit_code is not None
         return merger.exit_code
@@ -163,8 +157,10 @@ def nyx_main(
     warn_local(opts)
 
     procs: list[Popen[str] | None] = [None] * opts.instances
+    log_tee = LogTee(opts.afl_hide_logs, opts.instances)
 
     afl_fuzz = opts.aflbindir / "afl-fuzz"
+    tmp_base = TempPath()
     try:
         for idx in range(opts.instances):
             log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, idx))
