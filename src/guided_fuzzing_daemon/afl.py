@@ -358,6 +358,11 @@ def afl_main(
                     crashing_instance = int(crash_path.parent.parent.name)
                     env = envs[crashing_instance].copy()
                     env["MOZ_FUZZ_TESTFILE"] = str(crash_path.resolve())
+                    # many targets require `AFL_PRELOAD` to get coverage from dlopen-ed
+                    # libraries, but we don't care about coverage for repro, so just
+                    # ignore problems (using `LD_PRELOAD` silences the warnings, but
+                    # breaks `llvm-symbolizer`)
+                    env["AFL_IGNORE_PROBLEMS"] = "1"
                     runner = AutoRunner.fromBinaryArgs(binary, env=env)
                     if runner.run():
                         crash_info = runner.getCrashInfo(cfgs[crashing_instance])
