@@ -154,6 +154,10 @@ def afl_main(
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = f"{binary.parent / 'gtest'}:{binary.parent}"
 
+            # AFL_PRELOAD is not handled by afl-cmin, but is required by some targets
+            if "AFL_PRELOAD" in env:
+                env["LD_PRELOAD"] = env["AFL_PRELOAD"]
+
             log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, 0))
 
             afl_cmdline = [
