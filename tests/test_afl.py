@@ -617,6 +617,14 @@ def test_afl_refresh_02(afl, mocker, tmp_path):
     # setup
     stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    mocker.patch(
+        "os.environ",
+        {
+            "AFL_PRELOAD": "afl.so",
+            "LD_LIBRARY_PATH": "/test/lib",
+            "LD_PRELOAD": "something.so",
+        },
+    )
     afl.args.corpus_refresh = tmp_path / "refresh"
     (afl.aflbindir / "afl-cmin").touch()
 
@@ -625,10 +633,14 @@ def test_afl_refresh_02(afl, mocker, tmp_path):
         assert "env" in kwds
         assert "LD_LIBRARY_PATH" in kwds["env"]
         ld_lib_path = tuple(Path(p) for p in kwds["env"]["LD_LIBRARY_PATH"].split(":"))
-        assert {binary.parent / "gtest", binary.parent} <= set(ld_lib_path)
+        assert {binary.parent / "gtest", binary.parent, Path("/test/lib")} <= set(
+            ld_lib_path
+        )
         assert ld_lib_path.index(binary.parent / "gtest") < ld_lib_path.index(
             binary.parent
         )
+        assert ld_lib_path.index(binary.parent) < ld_lib_path.index(Path("/test/lib"))
+        assert kwds["env"]["LD_PRELOAD"] == "afl.so:something.so"
         return mocker.DEFAULT
 
     binary = tmp_path / "firefox" / "firefox"
