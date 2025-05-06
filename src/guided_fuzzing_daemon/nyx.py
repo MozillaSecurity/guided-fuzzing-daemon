@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import signal
 from argparse import Namespace
 from logging import getLogger
 from pathlib import Path, PurePosixPath
@@ -29,6 +30,10 @@ from .utils import LogTee, TempPath, create_envs, open_log_handle, warn_local
 
 ASAN_SYMBOLIZE = which("asan_symbolize")
 LOG = getLogger("gfd.nyx")
+
+# Depending on where in the fuzzing loop we are when the interrupt is sent,
+# AFL may take up to 15 minutes to exit
+AFL_INTERRUPT_WAIT = 15 * 60
 
 
 def nyx_main(
@@ -170,7 +175,11 @@ def nyx_main(
         corpus_seed.mkdir()
         copy(seed, corpus_seed)
 
-        while opts.max_runtime > time() - start:
+        if AFL_INTERRUPT_WAIT > opts.max_runtime:
+            LOG.warning("Max runtime is less than interrupt wait time.  Aborting...")
+            return 0
+
+        while opts.max_runtime - AFL_INTERRUPT_WAIT > time() - start:
             # check and restart subprocesses
             for idx, proc in enumerate(procs):
                 if proc and proc.poll() is not None:
@@ -372,11 +381,11 @@ def nyx_main(
             LOG.warning("need to kill %d", sum(1 for proc in procs if proc))
         for proc in procs:
             if proc:
-                proc.kill()
+                proc.send_signal(signal.SIGINT)
                 try:
-                    proc.wait(timeout=1)
+                    proc.wait(timeout=AFL_INTERRUPT_WAIT)
                 except TimeoutExpired:
-                    LOG.error("Process %d did not exit after SIGKILL", proc.pid)
+                    LOG.error("Process %d did not exit after SIGINT", proc.pid)
 
         log_tee.close()
 

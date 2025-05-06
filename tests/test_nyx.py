@@ -2,6 +2,7 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+import signal
 from itertools import chain, count, repeat
 from os import chdir
 from pathlib import Path, PurePosixPath
@@ -219,8 +220,9 @@ def test_nyx_03a(nyx):
     popen = nyx.popen.return_value
     assert popen.terminate.call_count == 1
     assert popen.poll.call_count > 0
-    assert popen.kill.call_count == 1
     assert popen.wait.call_count == 1
+    assert popen.send_signal.call_count == 1
+    popen.send_signal.assert_called_with(signal.SIGINT)
 
 
 def test_nyx_03b(caplog, nyx):
@@ -238,10 +240,11 @@ def test_nyx_03b(caplog, nyx):
     popen = nyx.popen.return_value
     assert popen.terminate.call_count == 1
     assert popen.poll.call_count > 0
-    assert popen.kill.call_count == 1
     assert popen.wait.call_count == 1
+    assert popen.send_signal.call_count == 1
+    popen.send_signal.assert_called_with(signal.SIGINT)
     assert any(
-        "123 did not exit after SIGKILL" in record.message for record in caplog.records
+        "123 did not exit after SIGINT" in record.message for record in caplog.records
     )
 
 
