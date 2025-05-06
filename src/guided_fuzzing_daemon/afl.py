@@ -152,11 +152,15 @@ def afl_main(
             LogTee(opts.afl_hide_logs, opts.instances) as log_tee,
         ):
             env = os.environ.copy()
-            env["LD_LIBRARY_PATH"] = f"{binary.parent / 'gtest'}:{binary.parent}"
+            library_path = [str(binary.parent / "gtest"), str(binary.parent)]
+            library_path.extend(env.get("LD_LIBRARY_PATH", "").split(":"))
+            env["LD_LIBRARY_PATH"] = ":".join(library_path)
 
             # AFL_PRELOAD is not handled by afl-cmin, but is required by some targets
             if "AFL_PRELOAD" in env:
-                env["LD_PRELOAD"] = env["AFL_PRELOAD"]
+                preload = [env["AFL_PRELOAD"]]
+                preload.extend(env.get("LD_PRELOAD", "").split(":"))
+                env["LD_PRELOAD"] = ":".join(preload)
 
             log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, 0))
 
