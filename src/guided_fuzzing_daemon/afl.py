@@ -170,6 +170,8 @@ def afl_main(
                 "-m",
                 "none",
                 str(binary),
+                "-T",
+                str(opts.instances),
             ]
 
             LOG.info("Running afl-cmin")
