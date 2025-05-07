@@ -304,6 +304,9 @@ def afl_main(
                     if opts.memory_limit:
                         cmd.extend(("-m", f"{opts.memory_limit}"))
 
+                    if "TOKENS" in envs[idx]:
+                        cmd.extend(("-x", envs[idx]["TOKENS"]))
+
                     # environment settings that apply to this instance
                     this_env = envs[idx].copy()
                     if opts.afl_async_corpus and not idx:
