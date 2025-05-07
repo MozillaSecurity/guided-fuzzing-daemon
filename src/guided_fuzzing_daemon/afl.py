@@ -370,6 +370,10 @@ def afl_main(
                     # ignore problems (using `LD_PRELOAD` silences the warnings, but
                     # breaks `llvm-symbolizer`)
                     env["AFL_IGNORE_PROBLEMS"] = "1"
+                    if "ASAN_OPTIONS" in env:
+                        env["ASAN_OPTIONS"] = env["ASAN_OPTIONS"].replace(
+                            "symbolize=0", "symbolize=1"
+                        )
                     runner = AutoRunner.fromBinaryArgs(binary, env=env)
                     if runner.run():
                         crash_info = runner.getCrashInfo(cfgs[crashing_instance])
