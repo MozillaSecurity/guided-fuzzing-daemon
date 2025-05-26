@@ -239,6 +239,11 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         action="store_true",
         help="Enable differential mode",
     )
+    fzli_group.add_argument(
+        "--wasm",
+        action="store_true",
+        help="Enable wasm mode",
+    )
 
     libf_group.add_argument(
         "--env",
