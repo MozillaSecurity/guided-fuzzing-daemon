@@ -251,6 +251,9 @@ def main(
     else:
         cmdline.append("--argumentRandomization")
 
+    if opts.wasm:
+        cmdline.append("--wasm")
+
     crashes_dir = opts.corpus_out / "crashes"
     diffs_dir = opts.corpus_out / "differentials"
 
