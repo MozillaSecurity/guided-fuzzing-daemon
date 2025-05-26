@@ -63,6 +63,12 @@ def scan_crashes(
     if not crash_dir.is_dir():
         return
 
+    env = env.copy()
+    env["ASAN_OPTIONS"] = f"{env.get('ASAN_OPTIONS', '')}:symbolize=1"
+    env["UBSAN_OPTIONS"] = (
+        f"{env.get('UBSAN_OPTIONS', '')}:handle_segv=1:abort_on_error=1:symbolize=1"
+    )
+
     for crash_file in crash_dir.iterdir():
         # Ignore all files that aren't crash results
         if not crash_file.name.startswith("program_"):
