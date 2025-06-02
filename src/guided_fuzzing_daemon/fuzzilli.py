@@ -265,6 +265,8 @@ def main(
     else:
         original_corpus = set()
 
+    cmdline.append(str(binary))
+
     # pylint: disable=consider-using-with
     fuzzer_proc = Popen(
         cmdline, stdout=PIPE, text=True, env=env, cwd=opts.fuzzilli_build_dir
