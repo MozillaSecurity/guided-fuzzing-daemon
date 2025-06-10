@@ -342,11 +342,16 @@ class GoogleCloudStorage(CloudStorageProvider):
 class CorpusSyncer:
     provider: CloudStorageProvider
     corpus: Corpus
+    suffix: str | None  # only add files with this extension
     extra_queues: list[Corpus]  # only used by upload_queues()
     project: PurePosixPath | None
 
     def __init__(
-        self, provider: CloudStorageProvider, corpus: Corpus, project: str | None
+        self,
+        provider: CloudStorageProvider,
+        corpus: Corpus,
+        project: str | None,
+        suffix: str | None = None,
     ) -> None:
         self.provider = provider
         self.corpus = corpus
@@ -355,6 +360,7 @@ class CorpusSyncer:
             self.project = None
         else:
             self.project = PurePosixPath(project)
+        self.suffix = suffix
 
     def download_corpus(self, random_subset_size: int | None = None) -> int:
         assert self.project is not None
@@ -407,8 +413,9 @@ class CorpusSyncer:
 
             with ZipFile(corpus_zip_local, "w", ZIP_DEFLATED) as zfp:
                 for testcase in self.corpus.path.iterdir():
-                    zfp.write(testcase, arcname=testcase.name)
-                    uploaded += 1
+                    if self.suffix is None or testcase.suffix == self.suffix:
+                        zfp.write(testcase, arcname=testcase.name)
+                        uploaded += 1
 
             if uploaded:
                 corpus_zip_remote.upload_from_file(corpus_zip_local)
@@ -451,8 +458,9 @@ class CorpusSyncer:
                         if testcase.name in skip_names:
                             continue
 
-                        zfp.write(testcase, arcname=testcase.name)
-                        uploaded += 1
+                        if self.suffix is None or testcase.suffix == self.suffix:
+                            zfp.write(testcase, arcname=testcase.name)
+                            uploaded += 1
 
             queue_zip_remote.upload_from_file(queue_zip_local, True)
             LOG.info("Uploaded ZIP: %s", queue_zip_local.name)
@@ -528,12 +536,12 @@ class CorpusSyncer:
 
 
 class CorpusRefreshContext:
-
     def __init__(
         self,
         opts: Namespace,
         storage: CloudStorageProvider,
         subdir: str | None = None,
+        suffix: str | None = None,
         extra_files: Iterable[Path] = (),
     ) -> None:
         self.project = opts.project
@@ -541,6 +549,7 @@ class CorpusRefreshContext:
         self.storage = storage
         self.stats = opts.stats
         self.exit_code: int | None = None
+        self.suffix = suffix
         self.extra_files = extra_files
 
         self.refresh_stats = StatAggregator()
@@ -561,7 +570,7 @@ class CorpusRefreshContext:
 
         try:
             queue_downloader = CorpusSyncer(
-                self.storage, Corpus(self.queues_dir), self.project
+                self.storage, Corpus(self.queues_dir), self.project, self.suffix
             )
 
             # Download our current corpus into the queues directory
@@ -616,7 +625,7 @@ class CorpusRefreshContext:
         # replace existing corpus with reduced corpus
         LOG.info("Uploading reduced corpus to %s/corpus/", self.cloud_path)
         corpus_uploader = CorpusSyncer(
-            self.storage, Corpus(updated_tests_dir), self.project
+            self.storage, Corpus(updated_tests_dir), self.project, self.suffix
         )
         corpus_uploader.upload_corpus()
         for extra in self.extra_files:
