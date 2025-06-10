@@ -176,7 +176,7 @@ def main(
     assert binary.is_file()
 
     if opts.corpus_refresh:
-        with CorpusRefreshContext(opts, storage, subdir="corpus") as merger:
+        with CorpusRefreshContext(opts, storage, "corpus", ".fzil") as merger:
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = str(binary.parent)
 
@@ -217,7 +217,7 @@ def main(
 
     assert opts.corpus_out
     corpus_syncer = CorpusSyncer(
-        storage, Corpus(opts.corpus_out / "corpus"), opts.project
+        storage, Corpus(opts.corpus_out / "corpus"), opts.project, ".fzil"
     )
 
     base_cfg = ProgramConfiguration.fromBinary(binary)
