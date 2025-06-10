@@ -3,9 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from __future__ import annotations
 
-import hashlib
 import sys
-import zipfile
 from abc import ABC, abstractmethod
 from argparse import Namespace
 from dataclasses import dataclass
@@ -17,6 +15,7 @@ from shutil import rmtree
 from time import perf_counter
 from typing import Any, Iterable, Iterator
 from uuid import uuid4
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import boto3
 import botocore
@@ -360,26 +359,34 @@ class CorpusSyncer:
     def download_corpus(self, random_subset_size: int | None = None) -> int:
         assert self.project is not None
         start = perf_counter()
-        with Executor() as executor:
-            prefix = self.project / "corpus"
-            downloaded = 0
-            if random_subset_size is None:
-                file_iter = self.provider.iter(prefix)
-            else:
-                all_files = tuple(self.provider.iter(prefix))
-                n_files = min(random_subset_size, len(all_files))
-                LOG.info(
-                    "selecting %d files at random from %d total corpus files",
-                    random_subset_size,
-                    n_files,
-                )
-                file_iter = sample(all_files, random_subset_size)
-            for file in file_iter:
-                out_path = self.corpus.path / file.path.name
-                assert not out_path.exists()
-                executor.submit(file.download_to_file, out_path)
-                downloaded += 1
-            n_files = downloaded
+
+        downloaded = 0
+
+        with TempPath() as tmpd:
+            corpus_zip_remote = self.provider[self.project / "corpus.zip"]
+            corpus_zip_local = tmpd / "corpus.zip"
+            if not corpus_zip_remote.exists():
+                LOG.info("download_corpus() -> no corpus found")
+                return 0
+
+            corpus_zip_remote.download_to_file(corpus_zip_local)
+
+            with ZipFile(corpus_zip_local) as zfp:
+                files = zfp.infolist()
+                n_files = len(files)
+
+                if random_subset_size is not None:
+                    LOG.info(
+                        "selecting %d files at random from %d total corpus files",
+                        random_subset_size,
+                        n_files,
+                    )
+                    files = sample(files, random_subset_size)
+
+                for file in files:
+                    zfp.extract(file, self.corpus.path)
+                    downloaded += 1
+
         LOG.info(
             "download_corpus() -> downloaded=%d, total=%d (%.03fs)",
             downloaded,
@@ -391,82 +398,68 @@ class CorpusSyncer:
     def upload_corpus(self) -> None:
         assert self.project is not None
         start = perf_counter()
-        with Executor() as executor:
-            prefix = self.project / "corpus"
-            # get list of files to delete if upload is successful
-            existing = {file.path.name: file for file in self.provider.iter(prefix)}
-            old_corpus_size = len(existing)
-            # upload new files
-            uploaded = 0
-            for testcase in self.corpus.path.iterdir():
-                hash_name = hashlib.sha1(testcase.read_bytes()).hexdigest()
-                if hash_name in existing:
-                    # remove from existing so it isn't deleted
-                    del existing[hash_name]
-                else:
-                    remote_obj = self.provider[prefix / hash_name]
-                    executor.submit(remote_obj.upload_from_file, testcase)
+
+        uploaded = 0
+
+        with TempPath() as tmpd:
+            corpus_zip_remote = self.provider[self.project / "corpus.zip"]
+            corpus_zip_local = tmpd / "corpus.zip"
+
+            with ZipFile(corpus_zip_local, "w", ZIP_DEFLATED) as zfp:
+                for testcase in self.corpus.path.iterdir():
+                    zfp.write(testcase, arcname=testcase.name)
                     uploaded += 1
 
-        # delete files that no longer exist in the local corpus
-        deleted = len(existing)
-        self.provider.delete(tuple(existing.values()))
+            if uploaded:
+                corpus_zip_remote.upload_from_file(corpus_zip_local)
+                LOG.info("Uploaded ZIP: %s", corpus_zip_local.name)
+            elif corpus_zip_remote.exists():
+                corpus_zip_remote.delete()
+                LOG.warning("Corpus is empty! Deleting corpus.zip")
+
         LOG.info(
-            "upload_corpus() -> before=%d, new=%d, deleted=%d, after=%d (%.03fs)",
-            old_corpus_size,
+            "upload_corpus() -> uploaded=%d (%.03fs)",
             uploaded,
-            deleted,
-            uploaded + old_corpus_size - deleted,
             perf_counter() - start,
         )
 
-    def upload_queue(self, skip_hashes: Iterable[str]) -> None:
+    def upload_queue(self, skip_names: Iterable[str]) -> None:
         assert self.project is not None
         start = perf_counter()
-        # get list of files existing
-        prefix = self.project / "queues" / self.corpus.uuid
-        existing = {file.path.name for file in self.provider.iter(prefix)}
-        old_corpus_size = len(existing)
-        existing |= set(skip_hashes)
-        # upload new files
+
+        skip_names = set(skip_names)
         uploaded = 0
         errors = 0
 
         # Create a temporary ZIP file
-        with TempPath() as temp_dir:
-            zip_path = temp_dir / f"{self.corpus.uuid}.zip"
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zfp:
+        with TempPath() as tmpd:
+            queue_zip_remote = self.provider[
+                self.project / "queues" / f"{self.corpus.uuid}.zip"
+            ]
+            queue_zip_local = tmpd / f"{self.corpus.uuid}.zip"
+
+            with ZipFile(queue_zip_local, "w", ZIP_DEFLATED) as zfp:
                 for queue in [self.corpus, *self.extra_queues]:
                     if not queue.path.is_dir():
                         continue
                     for testcase in queue.path.iterdir():
-                        try:
-                            hash_name = hashlib.sha1(testcase.read_bytes()).hexdigest()
-                        except FileNotFoundError:
-                            LOG.error(
-                                "-> file gone before we could hash it: %s", testcase
-                            )
-                            errors += 1
-                            continue
-                        except IsADirectoryError:
+                        if testcase.is_dir():
                             LOG.error("-> directory detected in corpus: %s", testcase)
                             errors += 1
                             continue
 
-                        if hash_name not in existing:
-                            existing.add(hash_name)
-                            zfp.write(testcase, arcname=testcase.name)
-                            uploaded += 1
+                        if testcase.name in skip_names:
+                            continue
 
-            remote_obj = self.provider[prefix / f"{self.corpus.uuid}.zip"]
-            remote_obj.upload_from_file(zip_path, True)
-            LOG.info("Uploaded ZIP: %s", zip_path)
+                        zfp.write(testcase, arcname=testcase.name)
+                        uploaded += 1
+
+            queue_zip_remote.upload_from_file(queue_zip_local, True)
+            LOG.info("Uploaded ZIP: %s", queue_zip_local.name)
 
         LOG.info(
-            "upload_to_queue() -> before=%d, new=%d, after=%d, errors=%d (%.03fs)",
-            old_corpus_size,
+            "upload_to_queue() -> uploaded=%d, errors=%d (%.03fs)",
             uploaded,
-            uploaded + old_corpus_size,
             errors,
             perf_counter() - start,
         )
@@ -493,35 +486,35 @@ class CorpusSyncer:
         dupes = 0
 
         prefix = self.project / "queues"
-        with Executor() as executor:
-            for file in self.provider.iter(prefix):
-                queue_name = file.path.parts[2]  # skip project and "queues" folders
-                if queue_name not in status_data:
-                    status_data[queue_name] = 0
-                status_data[queue_name] += 1
+        with TempPath() as tmpd:
+            with Executor() as executor:
+                for file in self.provider.iter(prefix):
+                    queue_name = file.path.parts[2]  # skip project and "queues" folders
+                    if queue_name.endswith(".zip"):
+                        queue_name = queue_name[:-4]
+                    if queue_name not in status_data:
+                        status_data[queue_name] = 0
+                    status_data[queue_name] += 1
 
-                out_path = self.corpus.path / file.path.name
-                if out_path.exists():
-                    dupes += 1
-                else:
+                    out_path = tmpd / file.path.name
                     executor.submit(file.download_to_file, out_path)
                     downloaded += 1
 
-        extracted = 0
-        for zip_file in self.corpus.path.glob("*.zip"):
-            queue_name = zip_file.stem
-            assert queue_name in status_data
-            with zipfile.ZipFile(zip_file, "r") as zf:
-                for file_name in zf.namelist():
-                    status_data[queue_name] += 1
-                    extracted_path = self.corpus.path / file_name
-                    if extracted_path.exists():
-                        dupes += 1
-                    else:
-                        zf.extract(file_name, self.corpus.path)
-                        extracted += 1
-            zip_file.unlink()
-            status_data[queue_name] -= 1
+            extracted = 0
+            for zip_file in tmpd.glob("*.zip"):
+                queue_name = zip_file.stem
+                assert queue_name in status_data
+                with ZipFile(zip_file) as zf:
+                    for file_name in zf.namelist():
+                        status_data[queue_name] += 1
+                        extracted_path = self.corpus.path / file_name
+                        if extracted_path.exists():
+                            dupes += 1
+                        else:
+                            zf.extract(file_name, self.corpus.path)
+                            extracted += 1
+                zip_file.unlink()
+                status_data[queue_name] -= 1
 
         LOG.info(
             "download_queues() -> downloaded=%d, extracted=%d, skipped=%d (%.03fs)",
