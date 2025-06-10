@@ -456,7 +456,7 @@ def test_libfuzzer_refresh_01(libf, mocker, tmp_path):
     assert syncer.return_value.method_calls == [
         mocker.call.download_corpus(),
         mocker.call.download_queues(),
-        mocker.call.upload_corpus(delete_existing=True),
+        mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]
     assert stats.return_value.write_file.call_count == 2

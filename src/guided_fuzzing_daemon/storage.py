@@ -388,7 +388,7 @@ class CorpusSyncer:
         )
         return downloaded
 
-    def upload_corpus(self, delete_existing: bool = False) -> None:
+    def upload_corpus(self) -> None:
         assert self.project is not None
         start = perf_counter()
         with Executor() as executor:
@@ -409,25 +409,16 @@ class CorpusSyncer:
                     uploaded += 1
 
         # delete files that no longer exist in the local corpus
-        if delete_existing:
-            deleted = len(existing)
-            self.provider.delete(tuple(existing.values()))
-            LOG.info(
-                "upload_corpus() -> before=%d, new=%d, deleted=%d, after=%d (%.03fs)",
-                old_corpus_size,
-                uploaded,
-                deleted,
-                uploaded + old_corpus_size - deleted,
-                perf_counter() - start,
-            )
-        else:
-            LOG.info(
-                "upload_corpus() -> before=%d, new=%d, after=%d (%.03fs)",
-                old_corpus_size,
-                uploaded,
-                uploaded + old_corpus_size,
-                perf_counter() - start,
-            )
+        deleted = len(existing)
+        self.provider.delete(tuple(existing.values()))
+        LOG.info(
+            "upload_corpus() -> before=%d, new=%d, deleted=%d, after=%d (%.03fs)",
+            old_corpus_size,
+            uploaded,
+            deleted,
+            uploaded + old_corpus_size - deleted,
+            perf_counter() - start,
+        )
 
     def upload_queue(self, skip_hashes: Iterable[str]) -> None:
         assert self.project is not None
@@ -634,7 +625,7 @@ class CorpusRefreshContext:
         corpus_uploader = CorpusSyncer(
             self.storage, Corpus(updated_tests_dir), self.project
         )
-        corpus_uploader.upload_corpus(delete_existing=True)
+        corpus_uploader.upload_corpus()
         for extra in self.extra_files:
             remote_obj = self.storage[
                 PurePosixPath(self.project) / "corpus" / extra.name

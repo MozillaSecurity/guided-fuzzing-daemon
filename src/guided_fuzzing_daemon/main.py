@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if opts.corpus_upload:
         syncer = CorpusSyncer(storage, Corpus(opts.corpus_upload), opts.project)
-        syncer.upload_corpus(opts.corpus_replace)
+        syncer.upload_corpus()
         return 0
 
     if opts.list_projects:

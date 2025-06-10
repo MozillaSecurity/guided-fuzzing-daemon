@@ -744,8 +744,7 @@ def test_syncer_02(mocker, tmp_path):
     assert f3.method_calls == []
 
 
-@pytest.mark.parametrize("delete_existing", (True, False))
-def test_syncer_03(delete_existing, mocker, tmp_path):
+def test_syncer_03(mocker, tmp_path):
     """test upload_corpus()"""
     # pylint: disable=unnecessary-dunder-call
     storage = mocker.MagicMock(spec=CloudStorageProvider)
@@ -759,10 +758,9 @@ def test_syncer_03(delete_existing, mocker, tmp_path):
     f2 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/corpus/62"))
     storage.iter.side_effect = [(f1, f2)]
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    syncer.upload_corpus(delete_existing=delete_existing)
+    syncer.upload_corpus()
     assert storage.mock_calls.pop(0) == mocker.call.iter(PurePosixPath("t_proj/corpus"))
-    if delete_existing:
-        assert storage.mock_calls.pop() == mocker.call.delete((f1,))
+    assert storage.mock_calls.pop() == mocker.call.delete((f1,))
 
     expected_paths = {
         PurePosixPath("t_proj/corpus/63"): l3,
