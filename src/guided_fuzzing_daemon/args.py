@@ -199,10 +199,11 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         help="Use cloud storage to upload a test corpus for the specified project",
         metavar="DIR",
     )
+    # deprecated (default)
     storage_group.add_argument(
         "--corpus-replace",
         action="store_true",
-        help="In conjunction with --corpus-upload, deletes all other remote test files",
+        help=SUPPRESS,
     )
     storage_group.add_argument(
         "--corpus-refresh",
@@ -488,6 +489,9 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         LOG.warning("--afl-timeout is deprecated, use --timeout instead")
         assert opts.timeout is None
         opts.timeout = opts.afl_timeout
+
+    if opts.corpus_replace:
+        LOG.warning("--corpus-replace is deprecated (now default behavior)")
 
     if opts.mode == "nyx":
         if opts.rargs:
