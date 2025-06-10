@@ -54,15 +54,6 @@ def _patches(mocker, monkeypatch):
 
     mocker.patch("guided_fuzzing_daemon.stats.CPU_POLL_INTERVAL", 0)
 
-    def _fake_sha1(data):
-        class _result:
-            def hexdigest(self):
-                return f"{data[0]:x}"
-
-        return _result()
-
-    mocker.patch("guided_fuzzing_daemon.storage.hashlib", sha1=_fake_sha1)
-
     # Mocked AWS Credentials for boto3.
     mocker.patch("boto3.Session.get_credentials", return_value=None)
     mocker.patch("botocore.credentials.RefreshableCredentials", return_value=None)
@@ -782,8 +773,8 @@ def test_syncer_03(mocker, tmp_path):
     assert not expected_paths
 
 
-@pytest.mark.parametrize("skip_hashes", ([], ["64"]))
-def test_syncer_04(mocker, skip_hashes, tmp_path):
+@pytest.mark.parametrize("skip_names", ([], ["64"]))
+def test_syncer_04(mocker, skip_names, tmp_path):
     """test upload_queue()"""
     # pylint: disable=unnecessary-dunder-call
     storage = mocker.MagicMock(spec=CloudStorageProvider)
@@ -811,21 +802,19 @@ def test_syncer_04(mocker, skip_hashes, tmp_path):
     zip_path = work_dir / zip_name
 
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    syncer.upload_queue(skip_hashes=skip_hashes)
+    syncer.upload_queue(skip_names=skip_names)
 
-    assert storage.mock_calls.pop(0) == mocker.call.iter(
-        PurePosixPath("t_proj/queues") / corpus.uuid
-    )
+    assert storage.mock_calls.pop(0) == mocker.call.iter(PurePosixPath("t_proj/queues"))
 
     assert storage.__getitem__.call_count == 1
-    remote_path = PurePosixPath(f"t_proj/queues/{corpus.uuid}/{zip_name}")
+    remote_path = PurePosixPath(f"t_proj/queues/{zip_name}")
     assert storage.__getitem__.call_args == mocker.call.__getitem__(remote_path)
 
     expected_paths = {
         PurePosixPath(f"t_proj/queues/{corpus.uuid}/62"): l2,
         PurePosixPath(f"t_proj/queues/{corpus.uuid}/63"): l3,
     }
-    if not skip_hashes:
+    if not skip_names:
         expected_paths[PurePosixPath(f"t_proj/queues/{corpus.uuid}/64")] = l4
 
     # Verify zip file contents
@@ -905,12 +894,12 @@ def test_syncer_06(mocker, tmp_path):
     assert {f.name for f in tmp_path.iterdir()} == {"61", "62", "63", "64"}
 
 
-@pytest.mark.parametrize("skip_hashes", ([], ["64"]))
-def test_syncer_07(mocker, skip_hashes, tmp_path):
+@pytest.mark.parametrize("skip_names", ([], ["64"]))
+def test_syncer_07(mocker, skip_names, tmp_path):
     """test upload_queue() with extras"""
     # pylint: disable=unnecessary-dunder-call
     storage = mocker.MagicMock(spec=CloudStorageProvider)
-    # create a queue with 4 files, 1 of which might be skipped by skip_hashes
+    # create a queue with 4 files, 1 of which might be skipped by skip_names
     q1 = tmp_path / "1"
     q1.mkdir()
     corpus = Corpus(q1)
@@ -952,14 +941,14 @@ def test_syncer_07(mocker, skip_hashes, tmp_path):
 
     syncer = CorpusSyncer(storage, corpus, "t_proj")
     syncer.extra_queues.extend((Corpus(q2), Corpus(q3)))
-    syncer.upload_queue(skip_hashes=skip_hashes)
+    syncer.upload_queue(skip_names=skip_names)
 
     assert storage.mock_calls.pop(0) == mocker.call.iter(
         PurePosixPath("t_proj/queues") / corpus.uuid
     )
     # Ensure only one upload happens (the ZIP file)
     assert storage.__getitem__.call_count == 1
-    remote_path = PurePosixPath(f"t_proj/queues/{corpus.uuid}/{zip_name}")
+    remote_path = PurePosixPath(f"t_proj/queues/{zip_name}")
     assert storage.__getitem__.call_args == mocker.call.__getitem__(remote_path)
     assert (
         storage.__getitem__().upload_from_file.call_args
@@ -973,7 +962,7 @@ def test_syncer_07(mocker, skip_hashes, tmp_path):
         "65": l5,
         "66": l6,
     }
-    if not skip_hashes:
+    if not skip_names:
         expected_paths["64"] = l4
 
     # Ensure the ZIP file exists and contains the correct files
