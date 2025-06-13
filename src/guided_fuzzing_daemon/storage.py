@@ -424,9 +424,8 @@ class CorpusSyncer:
         to_delete = {
             file.path.name: file for file in self.provider.iter(self.project / "corpus")
         }
-        # remove corpus.zip, it will be overwritten on success, or re-added to this
-        # dict if the corpus is empty
-        corpus_zip_exists = to_delete.pop("corpus.zip", None)
+        # remove corpus.zip, it will be overwritten on success
+        to_delete.pop("corpus.zip", None)
 
         with TempPath() as tmpd:
             corpus_zip_remote = self.provider[self.project / "corpus.zip"]
@@ -441,9 +440,9 @@ class CorpusSyncer:
             if uploaded:
                 corpus_zip_remote.upload_from_file(corpus_zip_local)
                 LOG.info("Uploaded ZIP: %s", corpus_zip_local.name)
-            elif corpus_zip_exists is not None:
-                to_delete["corpus.zip"] = corpus_zip_exists
-                LOG.warning("Corpus is empty! Deleting corpus.zip")
+            else:
+                LOG.warning("Corpus is empty! Not deleting existing corpus")
+                to_delete.clear()
 
         self.provider.delete(to_delete.values())
 
