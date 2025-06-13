@@ -492,24 +492,38 @@ class CorpusSyncer:
         status_data = {}
         downloaded = 0
         dupes = 0
+        zips = []
 
         prefix = self.project / "queues"
         with TempPath() as tmpd:
             with Executor() as executor:
                 for file in self.provider.iter(prefix):
+
                     queue_name = file.path.parts[2]  # skip project and "queues" folders
+                    # Only unzip when file was named `queues/*.zip`.
+                    # A target could use .zip for its testcases
+                    # and we shouldn't try to unzip those.
                     if queue_name.endswith(".zip"):
                         queue_name = queue_name[:-4]
+                        out_path = tmpd / file.path.name
+                        zips.append(out_path)
+                    # legacy path for zip queues
+                    elif file.path.suffix == ".zip" and file.path.stem == queue_name:
+                        out_path = tmpd / file.path.name
+                        zips.append(out_path)
+                    else:
+                        # download directly to corpus path
+                        out_path = self.corpus.path / file.path.name
+
                     if queue_name not in status_data:
                         status_data[queue_name] = 0
                     status_data[queue_name] += 1
 
-                    out_path = tmpd / file.path.name
                     executor.submit(file.download_to_file, out_path)
                     downloaded += 1
 
             extracted = 0
-            for zip_file in tmpd.glob("*.zip"):
+            for zip_file in zips:
                 queue_name = zip_file.stem
                 assert queue_name in status_data
                 with ZipFile(zip_file) as zf:
