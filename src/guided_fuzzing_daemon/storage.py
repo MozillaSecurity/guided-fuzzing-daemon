@@ -220,6 +220,8 @@ class S3Storage(CloudStorageProvider):
             assert isinstance(file, S3File)
             assert file._provider is self  # pylint: disable=protected-access
             keys.append({"Key": str(file.path)})
+        if not keys:
+            return
         with Executor() as executor:
             # The S3 rate limit for DELETE is 3500/s, so use a factor of that.
             # The max allowed delete size is 1000.
@@ -318,6 +320,8 @@ class GoogleCloudStorage(CloudStorageProvider):
             assert isinstance(file, GCSFile)
             assert file._provider is self  # pylint: disable=protected-access
             file_list.append(str(file.path))
+        if not file_list:
+            return
         with Executor() as executor:
             for del_files in batched(file_list, 100):
                 executor.submit(self.bucket.delete_blobs, del_files)
@@ -367,31 +371,40 @@ class CorpusSyncer:
         start = perf_counter()
 
         downloaded = 0
+        n_files = 0
+
+        # download legacy (unzipped) corpus
+        with Executor() as executor:
+            prefix = self.project / "corpus"
+            for remote_file in self.provider.iter(prefix):
+                out_path = self.corpus.path / remote_file.path.name
+                assert not out_path.exists()
+                executor.submit(remote_file.download_to_file, out_path)
+                downloaded += 1
+            n_files += downloaded
 
         with TempPath() as tmpd:
             corpus_zip_remote = self.provider[self.project / "corpus.zip"]
             corpus_zip_local = tmpd / "corpus.zip"
-            if not corpus_zip_remote.exists():
-                LOG.info("download_corpus() -> no corpus found")
-                return 0
+            if corpus_zip_remote.exists():
 
-            corpus_zip_remote.download_to_file(corpus_zip_local)
+                corpus_zip_remote.download_to_file(corpus_zip_local)
 
-            with ZipFile(corpus_zip_local) as zfp:
-                files = zfp.infolist()
-                n_files = len(files)
+                with ZipFile(corpus_zip_local) as zfp:
+                    files = zfp.infolist()
+                    n_files += len(files)
 
-                if random_subset_size is not None:
-                    LOG.info(
-                        "selecting %d files at random from %d total corpus files",
-                        random_subset_size,
-                        n_files,
-                    )
-                    files = sample(files, random_subset_size)
+                    if random_subset_size is not None:
+                        LOG.info(
+                            "selecting %d files at random from %d total corpus files",
+                            random_subset_size,
+                            n_files,
+                        )
+                        files = sample(files, random_subset_size)
 
-                for file in files:
-                    zfp.extract(file, self.corpus.path)
-                    downloaded += 1
+                    for file in files:
+                        zfp.extract(file, self.corpus.path)
+                        downloaded += 1
 
         LOG.info(
             "download_corpus() -> downloaded=%d, total=%d (%.03fs)",
@@ -407,6 +420,14 @@ class CorpusSyncer:
 
         uploaded = 0
 
+        # get list of files to delete if upload is successful
+        to_delete = {
+            file.path.name: file for file in self.provider.iter(self.project / "corpus")
+        }
+        # remove corpus.zip, it will be overwritten on success, or re-added to this
+        # dict if the corpus is empty
+        corpus_zip_exists = to_delete.pop("corpus.zip", None)
+
         with TempPath() as tmpd:
             corpus_zip_remote = self.provider[self.project / "corpus.zip"]
             corpus_zip_local = tmpd / "corpus.zip"
@@ -420,9 +441,11 @@ class CorpusSyncer:
             if uploaded:
                 corpus_zip_remote.upload_from_file(corpus_zip_local)
                 LOG.info("Uploaded ZIP: %s", corpus_zip_local.name)
-            elif corpus_zip_remote.exists():
-                corpus_zip_remote.delete()
+            elif corpus_zip_exists is not None:
+                to_delete["corpus.zip"] = corpus_zip_exists
                 LOG.warning("Corpus is empty! Deleting corpus.zip")
+
+        self.provider.delete(to_delete.values())
 
         LOG.info(
             "upload_corpus() -> uploaded=%d (%.03fs)",
