@@ -3,12 +3,15 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
+from __future__ import annotations
+
 import io
-import sys
-import zipfile
+import os
 from argparse import Namespace
-from datetime import datetime
-from pathlib import PurePosixPath
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from shutil import copyfile
+from zipfile import ZipFile
 
 import pytest
 from botocore.stub import ANY, Stubber
@@ -25,14 +28,69 @@ from guided_fuzzing_daemon.storage import (
     S3Storage,
 )
 
-if sys.version_info[:2] < (3, 12):
-    from guided_fuzzing_daemon.utils import batched
-else:
-    from itertools import batched
-
 
 class _TestExc(Exception):
     pass
+
+
+class LocalTestStorageFile(CloudStorageFile):
+    def __init__(self, name: PurePosixPath, root: Path) -> None:
+        super().__init__(name, None)
+        self._root = root
+
+    def _refresh(self) -> None:
+        self._modified = datetime.fromtimestamp(
+            (self._root / self.path).stat().st_mtime, timezone.utc
+        )
+
+    def download_to_file(self, dest: Path) -> None:
+        copyfile(self._root / self.path, dest)
+
+    def upload_from_file(self, src: Path, ignore_failure: bool = False) -> None:
+        dest = self._root / self.path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        copyfile(src, dest)
+
+    def trunc(self) -> None:
+        os.truncate(self._root / self.path, 0)
+
+    def delete(self) -> None:
+        (self._root / self.path).unlink()
+
+    def exists(self) -> bool:
+        return (self._root / self.path).is_file()
+
+
+class LocalTestStorageProvider(CloudStorageProvider):
+    def __init__(self, root: Path) -> None:
+        super().__init__("")  # bucket_name -> don't care
+        self.root = root
+        root.mkdir(parents=True, exist_ok=True)
+
+    def iter(self, prefix: PurePosixPath):
+        for f in self.iter_local():
+            result = [
+                a == b for a, b in zip(f.relative_to(self.root).parts, prefix.parts)
+            ]
+            if len(result) == len(prefix.parts) and all(result):
+                yield LocalTestStorageFile(f.relative_to(self.root), self.root)
+
+    def iter_local(self):
+        for f in self.root.glob("**/*"):
+            if f.is_file():
+                yield f
+
+    def iter_projects(self, prefix: str = ""):
+        for f in self.root.glob("*"):
+            if f.is_dir() and f.name.startswith(prefix):
+                yield f.name
+
+    def delete(self, files):
+        for f in files:
+            f.delete()
+
+    def __getitem__(self, name: PurePosixPath):
+        return LocalTestStorageFile(name, self.root)
 
 
 @pytest.fixture(autouse=True)
@@ -192,8 +250,14 @@ def test_cloudstorageprovider_02(csp, mocker):
     }
 
 
-def test_context_01(mocker, tmp_path):
+def test_context_01(tmp_path):
     """refresh context raises, writes stats"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+    # touch corpus.zip
+    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w"):
+        pass
+
     refresh_dir = tmp_path / "refresh"
     queues_dir = refresh_dir / "queues"
     queues_dir.mkdir(parents=True)
@@ -208,7 +272,6 @@ def test_context_01(mocker, tmp_path):
         provider="s3",
         stats=tmp_path / "stats",
     )
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
 
     with pytest.raises(_TestExc):
         with CorpusRefreshContext(opts, storage):
@@ -220,11 +283,6 @@ def test_context_01(mocker, tmp_path):
     assert stats["queue_files"] == "0"
     assert stats["corpus_post"] == "0"
     assert stats["corpus_pre"] == "0"
-
-    assert storage.method_calls == [
-        mocker.call.iter(PurePosixPath("t_proj/corpus")),
-        mocker.call.iter(PurePosixPath("t_proj/queues")),
-    ]
 
 
 def test_context_02(mocker, tmp_path):
@@ -257,8 +315,14 @@ def test_context_02(mocker, tmp_path):
     assert storage.method_calls == []
 
 
-def test_context_03(mocker, tmp_path):
+def test_context_03(tmp_path):
     """refresh context does nothing, exits 2"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+    # touch corpus.zip
+    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w"):
+        pass
+
     refresh_dir = tmp_path / "refresh"
     queues_dir = refresh_dir / "queues"
     tests_dir = refresh_dir / "tests"
@@ -270,7 +334,6 @@ def test_context_03(mocker, tmp_path):
         provider="s3",
         stats=tmp_path / "stats",
     )
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
 
     with CorpusRefreshContext(opts, storage) as ctx:
         pass
@@ -284,21 +347,23 @@ def test_context_03(mocker, tmp_path):
     assert stats["corpus_post"] == "0"
     assert stats["corpus_pre"] == "0"
 
-    assert storage.method_calls == [
-        mocker.call.iter(PurePosixPath("t_proj/corpus")),
-        mocker.call.iter(PurePosixPath("t_proj/queues")),
-    ]
 
-
-def test_context_04(mocker, tmp_path):
+def test_context_04(tmp_path):
     """refresh context does refresh, exits 0"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+    # create corpus.zip
+    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w") as zf:
+        zf.writestr("a", b"")
+    # create existing queues
+    (storage.root / "t_proj" / "queues" / "queue1").mkdir(parents=True)
+    (storage.root / "t_proj" / "queues" / "queue1" / "b").touch()
+    (storage.root / "t_proj" / "queues" / "queue1" / "c").touch()
+    with ZipFile(storage.root / "t_proj" / "queues" / "queue2.zip", "w") as zf:
+        zf.writestr("d", b"")
+
     refresh_dir = tmp_path / "refresh"
-    queues_dir = refresh_dir / "queues"
-    queue_dir = queues_dir / "queue1"
-    queue_dir.mkdir(parents=True)
     tests_dir = refresh_dir / "tests"
-    (queue_dir / "61").write_text("a")
-    (queue_dir / "62").write_text("b")
 
     opts = Namespace(
         bucket="t_bucket",
@@ -307,48 +372,22 @@ def test_context_04(mocker, tmp_path):
         provider="s3",
         stats=tmp_path / "stats",
     )
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
-
-    queue_good = mocker.Mock(
-        spec=CloudStorageFile, path=PurePosixPath("t_proj/queues/queue1/61")
-    )
-    queue_bad = mocker.Mock(
-        spec=CloudStorageFile, path=PurePosixPath("t_proj/queues/queue1/62")
-    )
-    corp_bad = mocker.Mock(
-        spec=CloudStorageFile, path=PurePosixPath("t_proj/corpus/62")
-    )
-
-    def _fake_iter(prefix):
-        if prefix.name == "queues":
-            return [queue_good, queue_bad]
-        return [corp_bad]
-
-    storage.iter.side_effect = _fake_iter
 
     with CorpusRefreshContext(opts, storage) as ctx:
-        (tests_dir / "61").write_text("a")
+        (tests_dir / "e").touch()
+        (tests_dir / "f").touch()
 
     assert ctx.exit_code == 0
 
-    assert set(tests_dir.iterdir()) == {tests_dir / "61"}
-    assert set(f for f in queues_dir.glob("**/*") if f.is_file()) == {
-        queue_dir / "61",
-        queue_dir / "62",
-    }
     stats = _read_stats(tmp_path / "stats")
-    assert stats["queue_files"] == "2"
-    assert stats["corpus_post"] == "1"
+    assert stats["queue_files"] == "3"
+    assert stats["corpus_post"] == "2"
     assert stats["corpus_pre"] == "1"
 
-    assert storage.method_calls == [
-        mocker.call.iter(PurePosixPath("t_proj/corpus")),
-        mocker.call.iter(PurePosixPath("t_proj/queues")),
-        mocker.call.iter(PurePosixPath("t_proj/corpus")),
-        mocker.call.delete((corp_bad,)),
-        mocker.call.iter(PurePosixPath("t_proj/queues")),
-        mocker.call.delete((queue_good, queue_bad)),
-    ]
+    assert set(storage.iter_local()) == {storage.root / "t_proj" / "corpus.zip"}
+
+    with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
+        assert set(zf.namelist()) == {"e", "f"}
 
 
 def test_gcsfile_01(gcsfile):
@@ -706,271 +745,275 @@ def test_s3storage_04(s3storage):
     assert file.path == PurePosixPath("test_file.txt")
 
 
-def test_syncer_01(mocker, tmp_path):
+def test_syncer_download_corpus(tmp_path):
     """test download_corpus()"""
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
-    corpus = Corpus(tmp_path)
-    f1 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/corpus/file1"))
-    f2 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/corpus/file2"))
-    storage.iter.side_effect = [(f1, f2)]
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj" / "corpus").mkdir(parents=True)
+    # create corpus.zip
+    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w") as zf:
+        zf.writestr("file1", b"")
+        zf.writestr("file2", b"")
+    (storage.root / "t_proj" / "corpus" / "file3").touch()
+
+    out_path = tmp_path / "out"
+    out_path.mkdir()
+    corpus = Corpus(out_path)
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    assert syncer.download_corpus() == 2
-    assert f1.method_calls == [mocker.call.download_to_file(tmp_path / "file1")]
-    assert f2.method_calls == [mocker.call.download_to_file(tmp_path / "file2")]
+    assert syncer.download_corpus() == 3
+    assert (out_path / "file1").is_file()
+    assert (out_path / "file2").is_file()
+    assert (out_path / "file3").is_file()
 
 
-def test_syncer_02(mocker, tmp_path):
+def test_syncer_download_corpus_subset(tmp_path):
     """test download_corpus(random subset)"""
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
-    corpus = Corpus(tmp_path)
-    f1 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/corpus/file1"))
-    f2 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/corpus/file2"))
-    f3 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/corpus/file3"))
-    storage.iter.side_effect = [(f1, f2, f3)]
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+    # create corpus.zip
+    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w") as zf:
+        zf.writestr("file1", b"")
+        zf.writestr("file2", b"")
+        zf.writestr("file3", b"")
+
+    out_path = tmp_path / "out"
+    corpus = Corpus(out_path)
     syncer = CorpusSyncer(storage, corpus, "t_proj")
     assert syncer.download_corpus(1) == 1
 
-    assert f1.method_calls == [mocker.call.download_to_file(tmp_path / "file1")]
-    assert f2.method_calls == []
-    assert f3.method_calls == []
+    assert (out_path / "file1").is_file()
+    assert not (out_path / "file2").is_file()
+    assert not (out_path / "file2").is_file()
 
 
-def test_syncer_03(mocker, tmp_path):
+def test_syncer_upload_corpus(tmp_path):
     """test upload_corpus()"""
-    # pylint: disable=unnecessary-dunder-call
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
-    corpus = Corpus(tmp_path)
-    (tmp_path / "62").write_text("b")
-    l3 = tmp_path / "63"
-    l3.write_text("c")
-    l4 = tmp_path / "64"
-    l4.write_text("d")
-    f1 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/corpus/61"))
-    f2 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/corpus/62"))
-    storage.iter.side_effect = [(f1, f2)]
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj" / "corpus").mkdir(parents=True)
+    # create corpus.zip
+    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w"):
+        pass
+    (storage.root / "t_proj" / "corpus" / "file1").touch()
+
+    in_path = tmp_path / "in"
+    in_path.mkdir()
+    corpus = Corpus(in_path)
+    (in_path / "c").write_text("c")
+    (in_path / "d").write_text("d")
     syncer = CorpusSyncer(storage, corpus, "t_proj")
     syncer.upload_corpus()
-    assert storage.mock_calls.pop(0) == mocker.call.iter(PurePosixPath("t_proj/corpus"))
-    assert storage.mock_calls.pop() == mocker.call.delete((f1,))
 
-    expected_paths = {
-        PurePosixPath("t_proj/corpus/63"): l3,
-        PurePosixPath("t_proj/corpus/64"): l4,
+    assert set(storage.iter_local()) == {storage.root / "t_proj" / "corpus.zip"}
+    out_path = tmp_path / "out"
+    with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
+        assert set(zf.namelist()) == {"c", "d"}
+        zf.extractall(out_path)
+    assert (out_path / "c").read_text() == "c"
+    assert (out_path / "d").read_text() == "d"
+
+
+def test_syncer_upload_corpus_empty(tmp_path):
+    """test upload_corpus() doesn't delete existing corpus if empty result given"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj" / "corpus").mkdir(parents=True)
+    # create corpus.zip
+    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w") as zf:
+        zf.writestr("a", b"")
+    (storage.root / "t_proj" / "corpus" / "file1").touch()
+
+    in_path = tmp_path / "in"
+    in_path.mkdir()
+    corpus = Corpus(in_path)
+    syncer = CorpusSyncer(storage, corpus, "t_proj")
+    syncer.upload_corpus()
+
+    assert set(storage.iter_local()) == {
+        storage.root / "t_proj" / "corpus.zip",
+        storage.root / "t_proj" / "corpus" / "file1",
     }
-
-    # after `iter`/`delete`, there should be an even number of calls:
-    # - get the remote object by path
-    # - upload from the corresponding local path
-    assert len(storage.mock_calls) % 2 == 0
-    # batched will return the calls in chunks of 2
-    for item_call, upload_call in batched(storage.mock_calls, 2):
-        remote_path = item_call.args[0]
-        assert remote_path in expected_paths
-        local_path = expected_paths.pop(remote_path)
-        assert item_call == mocker.call.__getitem__(remote_path)
-        assert upload_call == mocker.call.__getitem__().upload_from_file(local_path)
-    # all should have been consumed
-    assert not expected_paths
+    with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
+        assert set(zf.namelist()) == {"a"}
 
 
-@pytest.mark.parametrize("skip_names", ([], ["64"]))
-def test_syncer_04(mocker, skip_names, tmp_path):
+def test_syncer_upload_corpus_suffix(tmp_path):
+    """test upload_corpus() only uploads given suffix"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj" / "corpus").mkdir(parents=True)
+    # create corpus.zip
+    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w"):
+        pass
+    (storage.root / "t_proj" / "corpus" / "file1").touch()
+
+    in_path = tmp_path / "in"
+    in_path.mkdir()
+    corpus = Corpus(in_path)
+    (in_path / "c.txt").write_text("c")
+    (in_path / "d.bin").write_text("d")
+    syncer = CorpusSyncer(storage, corpus, "t_proj", ".bin")
+    syncer.upload_corpus()
+
+    assert set(storage.iter_local()) == {storage.root / "t_proj" / "corpus.zip"}
+    out_path = tmp_path / "out"
+    with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
+        assert set(zf.namelist()) == {"d.bin"}
+        zf.extractall(out_path)
+    assert (out_path / "d.bin").read_text() == "d"
+
+
+@pytest.mark.parametrize("skip_names", ([], ["d"]))
+def test_syncer_upload_queue(skip_names, tmp_path):
     """test upload_queue()"""
-    # pylint: disable=unnecessary-dunder-call
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
-    corpus = Corpus(tmp_path)
-    (tmp_path / "61").write_text("a")
-    l2 = tmp_path / "62"
-    l2.write_text("b")
-    l3 = tmp_path / "63"
-    l3.write_text("c")
-    l4 = tmp_path / "64"
-    l4.write_text("d")
-    f1 = mocker.Mock(
-        spec=CloudStorageFile, path=PurePosixPath(f"t_proj/queues/{corpus.uuid}/61")
-    )
-    storage.iter.side_effect = [(f1,)]
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
 
-    # Create separate path for building the zipfile
-    (work_dir := tmp_path / "temp").mkdir(parents=True, exist_ok=True)
-    mocker.patch("guided_fuzzing_daemon.utils.mkdtemp", return_value=str(work_dir))
-
-    # Prevent cleaning the tmpdir
-    mocker.patch("guided_fuzzing_daemon.utils.rmtree")
-
-    zip_name = f"{corpus.uuid}.zip"
-    zip_path = work_dir / zip_name
+    in_path = tmp_path / "in"
+    corpus = Corpus(in_path)
+    in_path.mkdir()
+    (in_path / "a").write_text("a")
+    (in_path / "b").write_text("b")
+    (in_path / "c").write_text("c")
+    (in_path / "d").write_text("d")
+    (in_path / "e").mkdir()  # directory -> ignored
+    (in_path / "e" / "f").touch()
 
     syncer = CorpusSyncer(storage, corpus, "t_proj")
     syncer.upload_queue(skip_names=skip_names)
 
-    assert storage.mock_calls.pop(0) == mocker.call.iter(PurePosixPath("t_proj/queues"))
+    out_path = tmp_path / "out"
 
-    assert storage.__getitem__.call_count == 1
-    remote_path = PurePosixPath(f"t_proj/queues/{zip_name}")
-    assert storage.__getitem__.call_args == mocker.call.__getitem__(remote_path)
-
-    expected_paths = {
-        PurePosixPath(f"t_proj/queues/{corpus.uuid}/62"): l2,
-        PurePosixPath(f"t_proj/queues/{corpus.uuid}/63"): l3,
-    }
+    expected_paths = {out_path / "a", out_path / "b", out_path / "c"}
     if not skip_names:
-        expected_paths[PurePosixPath(f"t_proj/queues/{corpus.uuid}/64")] = l4
+        expected_paths.add(out_path / "d")
 
     # Verify zip file contents
-    assert zip_path.exists()
+    assert (storage.root / "t_proj" / "queues" / f"{corpus.uuid}.zip").is_file()
+    with ZipFile(storage.root / "t_proj" / "queues" / f"{corpus.uuid}.zip") as zf:
+        zf.extractall(out_path)
+    assert set(out_path.glob("**/*")) == expected_paths
+    for p in expected_paths:
+        assert p.read_text() == p.name
 
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zip_contents = set(zf.namelist())
 
-    assert zip_contents == {p.name for p in expected_paths.values()}
+def test_syncer_upload_queue_suffix(tmp_path):
+    """test upload_queue() only uploads given suffix"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+
+    in_path = tmp_path / "in"
+    corpus = Corpus(in_path)
+    in_path.mkdir()
+    (in_path / "a.txt").write_text("a")
+    (in_path / "b.bin").write_text("b")
+
+    syncer = CorpusSyncer(storage, corpus, "t_proj", ".bin")
+    syncer.upload_queue(skip_names=[])
+
+    out_path = tmp_path / "out"
+
+    expected_paths = {out_path / "b.bin"}
+
+    # Verify zip file contents
+    assert (storage.root / "t_proj" / "queues" / f"{corpus.uuid}.zip").is_file()
+    with ZipFile(storage.root / "t_proj" / "queues" / f"{corpus.uuid}.zip") as zf:
+        zf.extractall(out_path)
+    assert set(out_path.glob("**/*")) == expected_paths
+    for p in expected_paths:
+        assert p.read_text() == p.stem
 
 
-def test_syncer_05(mocker, tmp_path):
+def test_syncer_delete_queues(tmp_path):
     """test delete_queues()"""
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj" / "queues" / "queue1").mkdir(parents=True)
+    (storage.root / "t_proj" / "queues" / "queue1" / "a").touch()
+    with ZipFile(storage.root / "t_proj" / "queues" / "queue2.zip", "w"):
+        pass
+
     corpus = Corpus(tmp_path)
-    f1 = mocker.Mock(
-        spec=CloudStorageFile, path=PurePosixPath(f"t_proj/queues/{corpus.uuid}/61")
-    )
-    f2 = mocker.Mock(
-        spec=CloudStorageFile, path=PurePosixPath(f"t_proj/queues/{corpus.uuid}/62")
-    )
-    storage.iter.side_effect = [(f1, f2)]
     syncer = CorpusSyncer(storage, corpus, "t_proj")
     syncer.delete_queues()
-    assert storage.mock_calls == [
-        mocker.call.iter(PurePosixPath("t_proj/queues")),
-        mocker.call.delete((f1, f2)),
-    ]
+
+    assert set(storage.iter_local()) == set()
 
 
-def test_syncer_06(mocker, tmp_path):
+def test_syncer_download_queues(tmp_path):
     """test download_queues()"""
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
-    corpus = Corpus(tmp_path)
-    (tmp_path / "61").write_text("a")
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    # pre-zip queue
+    (storage.root / "t_proj" / "queues" / "queue1").mkdir(parents=True)
+    (storage.root / "t_proj" / "queues" / "queue1" / "a").touch()
+    # new location of queue.zip
+    with ZipFile(storage.root / "t_proj" / "queues" / "queue2.zip", "w") as zf:
+        zf.writestr("b", b"")
+        zf.writestr("c", b"")
+    # old location of queue.zip
+    (storage.root / "t_proj" / "queues" / "queue3").mkdir()
+    with ZipFile(
+        storage.root / "t_proj" / "queues" / "queue3" / "queue3.zip", "w"
+    ) as zf:
+        zf.writestr("c", b"")
+        zf.writestr("d", b"")
+    out_path = tmp_path / "out"
+    out_path.mkdir()
+    corpus = Corpus(out_path)
 
-    def _write_path(dest):
-        dest.touch()
-
-    # Regular files
-    f1 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/queues/a/61"))
-    f1.download_to_file.side_effect = _write_path
-    f2 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/queues/a/62"))
-    f2.download_to_file.side_effect = _write_path
-    # Duplicate in the queue
-    f3 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/queues/b/62"))
-    f3.download_to_file.side_effect = _write_path
-    f4 = mocker.Mock(spec=CloudStorageFile, path=PurePosixPath("t_proj/queues/b/63"))
-    f4.download_to_file.side_effect = _write_path
-
-    # Mock ZIP file
-    zip_path = PurePosixPath("t_proj/queues/b/b.zip")
-    f5 = mocker.Mock(spec=CloudStorageFile, path=zip_path)
-
-    def _write_zip(dest):
-        with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
-            (tmp_path / "64").write_text("a")  # New queue entry
-            (tmp_path / "62").write_text("a")  # Duplicate queue entry
-            zf.write(tmp_path / "64", arcname="64")
-            zf.write(tmp_path / "62", arcname="62")
-
-    f5.download_to_file.side_effect = _write_zip
-
-    storage.iter.side_effect = [(f1, f2, f3, f4, f5)]
     syncer = CorpusSyncer(storage, corpus, "t_proj")
     result = syncer.download_queues()
-    assert storage.mock_calls == [mocker.call.iter(PurePosixPath("t_proj/queues"))]
-    assert f1.mock_calls == []
-    assert f2.mock_calls == [mocker.call.download_to_file(tmp_path / "62")]
-    assert f3.mock_calls == []
-    assert f4.mock_calls == [mocker.call.download_to_file(tmp_path / "63")]
+    assert result == {"queue1": 1, "queue2": 2, "queue3": 2}
 
-    assert f5.download_to_file.call_count == 1
-
-    # Counts file total and in the case of a zip, the file count within the archive
-    assert result == {"a": 2, "b": 4}
-    assert {f.name for f in tmp_path.iterdir()} == {"61", "62", "63", "64"}
+    assert set(out_path.glob("**/*")) == {
+        out_path / "a",
+        out_path / "b",
+        out_path / "c",
+        out_path / "d",
+    }
 
 
-@pytest.mark.parametrize("skip_names", ([], ["64"]))
-def test_syncer_07(mocker, skip_names, tmp_path):
+@pytest.mark.parametrize("skip_names", ([], ["d"]))
+def test_syncer_upload_queue_extras(skip_names, tmp_path):
     """test upload_queue() with extras"""
-    # pylint: disable=unnecessary-dunder-call
-    storage = mocker.MagicMock(spec=CloudStorageProvider)
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+
     # create a queue with 4 files, 1 of which might be skipped by skip_names
-    q1 = tmp_path / "1"
+    q1 = tmp_path / "in1"
     q1.mkdir()
     corpus = Corpus(q1)
-    (q1 / "61").write_text("a")
-    l2 = q1 / "62"
-    l2.write_text("b")
-    l3 = q1 / "63"
-    l3.write_text("c")
-    l4 = q1 / "64"
-    l4.write_text("d")
-    # second queue contains 2 files, 1 of which exists in the first (never uploaded)
-    q2 = tmp_path / "2"
+    (q1 / "a").write_text("a")
+    (q1 / "b").write_text("b")
+    (q1 / "c").write_text("c")
+    (q1 / "d").write_text("d")
+    # second queue contains 2 files, 1 of which already exists in the first
+    q2 = tmp_path / "in2"
     q2.mkdir()
-    (q2 / "64").write_text("d")
-    l5 = q2 / "65"
-    l5.write_text("e")
+    (q2 / "d").write_text("d")
+    (q2 / "e").write_text("e")
     # third queue contains 1 unique file, to show that all queues are uploaded
-    q3 = tmp_path / "3"
+    q3 = tmp_path / "in3"
     q3.mkdir()
-    l6 = q3 / "66"
-    l6.write_text("f")
-    f1 = mocker.Mock(
-        spec=CloudStorageFile, path=PurePosixPath(f"t_proj/queues/{corpus.uuid}/61")
-    )
-    storage.iter.side_effect = [(f1,)]
-
-    # Patch mkdtemp to ensure zip file is created inside tmp_path
-    mocker.patch("guided_fuzzing_daemon.utils.mkdtemp", return_value=str(tmp_path))
-
-    # Prevent cleaning the tmpdir
-    mocker.patch("guided_fuzzing_daemon.utils.rmtree")
-
-    # Prevent the zip file from being deleted before checking contents
-    mocker.patch("guided_fuzzing_daemon.storage.Path.unlink", autospec=True)
-
-    # Expected ZIP file path
-    zip_name = f"{corpus.uuid}.zip"
-    zip_path = tmp_path / zip_name
+    (q3 / "f").write_text("f")
+    # non-existent extra queue is skipped
+    q4 = tmp_path / "in4"
 
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    syncer.extra_queues.extend((Corpus(q2), Corpus(q3)))
+    syncer.extra_queues.extend((Corpus(q2), Corpus(q3), Corpus(q4)))
     syncer.upload_queue(skip_names=skip_names)
 
-    assert storage.mock_calls.pop(0) == mocker.call.iter(
-        PurePosixPath("t_proj/queues") / corpus.uuid
-    )
-    # Ensure only one upload happens (the ZIP file)
-    assert storage.__getitem__.call_count == 1
-    remote_path = PurePosixPath(f"t_proj/queues/{zip_name}")
-    assert storage.__getitem__.call_args == mocker.call.__getitem__(remote_path)
-    assert (
-        storage.__getitem__().upload_from_file.call_args
-        == mocker.call.upload_from_file(zip_path, True)
-    )
+    out_path = tmp_path / "out"
 
-    # Define expected file paths in the ZIP archive
     expected_paths = {
-        "62": l2,
-        "63": l3,
-        "65": l5,
-        "66": l6,
+        out_path / "a",
+        out_path / "b",
+        out_path / "c",
+        out_path / "e",
+        out_path / "f",
     }
     if not skip_names:
-        expected_paths["64"] = l4
+        expected_paths.add(out_path / "d")
 
-    # Ensure the ZIP file exists and contains the correct files
-    assert zip_path.exists()
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zip_contents = set(zf.namelist())
-
-    assert zip_contents == set(expected_paths.keys())
-
-    # Ensure the ZIP file is deleted after verification
-    zip_path.unlink(missing_ok=True)
+    # Verify zip file contents
+    assert (storage.root / "t_proj" / "queues" / f"{corpus.uuid}.zip").is_file()
+    with ZipFile(storage.root / "t_proj" / "queues" / f"{corpus.uuid}.zip") as zf:
+        zf.extractall(out_path)
+    assert set(out_path.glob("**/*")) == expected_paths
+    for p in expected_paths:
+        assert p.read_text() == p.name
