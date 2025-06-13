@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if opts.list_projects:
-        for project in storage.iter_projects(opts.project or ""):
+        for project in sorted(storage.iter_projects(opts.project or "")):
             LOG.info(project)
         return 0
 
