@@ -4,6 +4,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from io import StringIO
 from itertools import chain, count, repeat
+from logging import DEBUG
 from os import chdir
 from pathlib import Path, PurePosixPath
 from shutil import rmtree
@@ -342,13 +343,11 @@ def test_fuzzilli_06(fuzzilli, tmp_path):
     assert (tmp_path / "stats").read_text() == "Fuzzer Statistics\nstats: 1234\n"
 
 
-@pytest.mark.parametrize("debug", (True, False))
-def test_fuzzilli_07(capsys, debug, fuzzilli):
+def test_fuzzilli_07(caplog, fuzzilli):
     """fuzzilli debug is handled"""
     # setup
     fuzzilli.sleep.side_effect = chain(repeat(None, 32), [MainBreak, None])
     orig_popen_cb = fuzzilli.popen.side_effect
-    fuzzilli.args.debug = debug
 
     def popen_print_output(*args, **kwds):
         result = orig_popen_cb(*args, **kwds)
@@ -361,12 +360,12 @@ def test_fuzzilli_07(capsys, debug, fuzzilli):
     # test
     fuzzilli.main()
 
-    # stdout is output only for debug
-    stdio = capsys.readouterr()
-    if debug:
-        assert "hello world" in stdio.out.splitlines()
-    else:
-        assert "hello world" not in stdio.out.splitlines()
+    # stdout is output on debug logger
+    assert any(
+        "hello world" in record.message
+        for record in caplog.records
+        if record.levelno == DEBUG
+    )
 
 
 def test_fuzzilli_08(fuzzilli):
