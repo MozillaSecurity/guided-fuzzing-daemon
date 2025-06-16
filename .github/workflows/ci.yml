@@ -45,7 +45,7 @@ jobs:
         run: tox -e lint
 
       - name: Run tests
-        run: tox -e ${{ matrix.toxenv }}
+        run: tox -e ${{ matrix.toxenv }} -- -vv
 
       - name: Run Codecov
         env:
