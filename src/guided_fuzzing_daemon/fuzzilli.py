@@ -141,18 +141,14 @@ def scan_crashes(
             )
 
 
-def _poll(
-    proc: Popen[str], stats: Path | None, debug: bool, in_stats: list[str]
-) -> int | None:
+def _poll(proc: Popen[str], stats: Path | None, in_stats: list[str]) -> int | None:
     """poll a Popen for stats on stdout"""
     assert proc.stdout is not None
     while proc.stdout.readable():
         line = proc.stdout.readline()
-        LOG.debug(line)
+        LOG.debug(line.rstrip())
         if not line:
             break
-        if debug:
-            print(line, end="")
         if in_stats:
             assert stats
             if not line.rstrip():
@@ -295,7 +291,7 @@ def main(
                 corpus_syncer.upload_queue(original_corpus)
                 last_queue_upload = time()
 
-            if _poll(fuzzer_proc, opts.stats, opts.debug, in_stats) is not None:
+            if _poll(fuzzer_proc, opts.stats, in_stats) is not None:
                 LOG.warning("Fuzzilli exited")
                 break
 
@@ -304,12 +300,12 @@ def main(
             LOG.info("max-runtime is up")
     finally:
         # terminate(), wait(10), kill(), wait()
-        if _poll(fuzzer_proc, opts.stats, opts.debug, in_stats) is None:
+        if _poll(fuzzer_proc, opts.stats, in_stats) is None:
             fuzzer_proc.terminate()
             start_term = time()
             while start_term > time() - 10:
                 sleep(0.1)
-                if _poll(fuzzer_proc, opts.stats, opts.debug, in_stats) is not None:
+                if _poll(fuzzer_proc, opts.stats, in_stats) is not None:
                     break
             else:
                 LOG.info("need to kill")
@@ -317,7 +313,7 @@ def main(
                 start_term = time()
                 while start_term > time() - 1:
                     sleep(0.1)
-                    if _poll(fuzzer_proc, opts.stats, opts.debug, in_stats) is not None:
+                    if _poll(fuzzer_proc, opts.stats, in_stats) is not None:
                         break
                 else:
                     LOG.warning(
@@ -327,6 +323,6 @@ def main(
         if opts.queue_upload:
             corpus_syncer.upload_queue(original_corpus)
 
-    if _poll(fuzzer_proc, opts.stats, opts.debug, in_stats) is None:
+    if _poll(fuzzer_proc, opts.stats, in_stats) is None:
         return 1
     return fuzzer_proc.returncode
