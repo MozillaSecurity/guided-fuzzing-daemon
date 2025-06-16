@@ -309,8 +309,8 @@ def test_nyx_04(
     args, kwds = nyx.run.call_args
     assert args[0][0] == nyx.asan_sym
     assert kwds["input"] == (
-        f'{nyx.sharedir / "ld_preload_fuzz_no_pt.so"}\n'
-        f'{nyx.sharedir / "firefox" / "firefox"}\n'
+        f"{nyx.sharedir / 'ld_preload_fuzz_no_pt.so'}\n"
+        f"{nyx.sharedir / 'firefox' / 'firefox'}\n"
         "blah\n"
     )
     assert not (nyx.corpus_out / "0" / "crashes" / "crash.log").exists()
@@ -349,7 +349,7 @@ def test_nyx_04(
         assert (
             nyx.corpus_out / "0" / "crashes" / "crash.log.symbolized"
         ).read_text() == (
-            "ld_preload_fuzz_no_pt.so\n" "/home/user/firefox/firefox\n" "blah\n"
+            "ld_preload_fuzz_no_pt.so\n/home/user/firefox/firefox\nblah\n"
         )
 
     else:

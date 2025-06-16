@@ -45,17 +45,17 @@ def test_stats_agg(loadavg, mocker, tmp_path):
     for field in agg.fields.values():
         assert field.reset.call_count == 1
     agg.write_file(tmp_path / "stats.txt", ())
-    assert (tmp_path / "stats.txt").read_text() == ("a : blah\n" "z : blzh\n")
+    assert (tmp_path / "stats.txt").read_text() == ("a : blah\nz : blzh\n")
     agg.write_file(tmp_path / "stats.txt", ["warning 1\n", "warning 2\n"])
     assert (tmp_path / "stats.txt").read_text() == (
-        "a : blah\n" "z : blzh\n" "warning 1\n" "warning 2\n"
+        "a : blah\nz : blzh\nwarning 1\nwarning 2\n"
     )
     agg.add_field(
         "long field", mocker.Mock(__str__=lambda _: "bllh", spec=Field, hidden=False)
     )
     agg.write_file(tmp_path / "stats.txt", ())
     assert (tmp_path / "stats.txt").read_text() == (
-        "a          : blah\n" "z          : blzh\n" "long field : bllh\n"
+        "a          : blah\nz          : blzh\nlong field : bllh\n"
     )
     agg.add_sys_stats()
     expected = (

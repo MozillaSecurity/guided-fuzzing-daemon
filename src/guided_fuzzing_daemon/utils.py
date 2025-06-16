@@ -286,7 +286,6 @@ class LogTee:
 
 
 class TempPath:
-
     def __init__(self) -> None:
         self.path = Path(mkdtemp(prefix="gfd-"))
 

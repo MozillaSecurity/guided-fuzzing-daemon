@@ -387,7 +387,6 @@ class CorpusSyncer:
             corpus_zip_remote = self.provider[self.project / "corpus.zip"]
             corpus_zip_local = tmpd / "corpus.zip"
             if corpus_zip_remote.exists():
-
                 corpus_zip_remote.download_to_file(corpus_zip_local)
 
                 with ZipFile(corpus_zip_local) as zfp:
@@ -520,7 +519,6 @@ class CorpusSyncer:
         with TempPath() as tmpd:
             with Executor() as executor:
                 for file in self.provider.iter(prefix):
-
                     queue_name = file.path.parts[2]  # skip project and "queues" folders
                     # Only unzip when file was named `queues/*.zip`.
                     # A target could use .zip for its testcases
