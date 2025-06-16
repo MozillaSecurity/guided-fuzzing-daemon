@@ -98,8 +98,12 @@ def test_libfuzzer_01(libf, mocker, tmp_path):
     assert cfg_inst.addMetadata.call_args_list == [
         mocker.call({"meta1": "metaval1", "meta2": "metaval2"})
     ]
+    assert "LD_LIBRARY_PATH" in libf.popen.call_args.kwargs["env"]
+    ld_library_path = (
+        libf.popen.call_args.kwargs["env"].pop("LD_LIBRARY_PATH").split(":")
+    )
+    assert str(tmp_path) in ld_library_path
     assert libf.popen.call_args.kwargs["env"] == {
-        "LD_LIBRARY_PATH": str(tmp_path),
         "genv1": "gval1",
         "env1": "val1",
         "env2": "val2",
