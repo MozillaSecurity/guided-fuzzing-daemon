@@ -26,7 +26,7 @@ STATS_UPLOAD_PERIOD = 30
 
 
 class Field(ABC):
-    __slots__ = ("_hidden", "_generated", "_suffix")
+    __slots__ = ("_generated", "_hidden", "_suffix")
 
     def __init__(
         self, hidden: bool = False, generated: bool = False, suffix: str = ""
@@ -207,7 +207,7 @@ class SumField(Field):
 
 
 class MeanField(Field):
-    __slots__ = ("_sum", "_count")
+    __slots__ = ("_count", "_sum")
 
     def __init__(self, suffix: str = "") -> None:
         super().__init__(suffix=suffix)
@@ -231,7 +231,7 @@ class MeanField(Field):
 
 
 class MaxField(Field):
-    __slots__ = ("_value", "_ignore_reset")
+    __slots__ = ("_ignore_reset", "_value")
 
     def __init__(self, ignore_reset: bool = False, suffix: str = "") -> None:
         super().__init__(suffix=suffix)
@@ -305,7 +305,7 @@ class MinField(Field):
 
 
 class MinMaxField(Field):
-    __slots__ = ("_min", "_max")
+    __slots__ = ("_max", "_min")
 
     def __init__(self, suffix: str = "") -> None:
         super().__init__()
