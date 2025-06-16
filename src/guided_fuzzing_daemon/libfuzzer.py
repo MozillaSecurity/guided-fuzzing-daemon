@@ -334,8 +334,10 @@ def libfuzzer_main(
 
     base_env = os.environ.copy()
     # Set LD_LIBRARY_PATH for convenience
-    if "LD_LIBRARY_PATH" not in base_env:
-        base_env["LD_LIBRARY_PATH"] = str(binary.parent)
+    ld_library_path = base_env.get("LD_LIBRARY_PATH", "").split(":")
+    if str(binary.parent) not in ld_library_path:
+        ld_library_path.insert(0, str(binary.parent))
+        base_env["LD_LIBRARY_PATH"] = ":".join(ld_library_path)
 
     if opts.corpus_refresh:
         with CorpusRefreshContext(opts, storage) as merger:
