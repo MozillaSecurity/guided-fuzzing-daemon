@@ -653,13 +653,17 @@ class CorpusRefreshContext:
             updated_tests_dir = updated_tests_dir / self.output_subdir
 
         self.refresh_stats.fields["corpus_post"].update(
-            sum(1 for _ in updated_tests_dir.iterdir())
+            sum(
+                1
+                for f in updated_tests_dir.iterdir()
+                if self.suffix is None or f.suffix == self.suffix
+            )
         )
 
         if self.stats:
             self.refresh_stats.write_file(self.stats, [])
 
-        if not any(updated_tests_dir.iterdir()):
+        if not self.refresh_stats.fields["corpus_post"].value:
             LOG.error("error: Merge returned empty result, refusing to upload.")
             self.exit_code = 2
             return
