@@ -145,7 +145,7 @@ def test_logfile(capsys, tmp_path):
         called = True
 
     with (tmp_path / "test.txt").open("w") as fd:
-        lf = LogFile(fd, "0")
+        lf = LogFile(fd, "[0] ")
         lf.add_pattern(re.compile(r"^test"), on_pattern)
         assert not called
         # check that 'hello world' is printed and doesn't match pattern
@@ -211,7 +211,7 @@ def test_logtee_1(mocker, tmp_path):
     assert lt.pattern is pat
     with (tmp_path / "test.txt").open("w") as fd:
         lt.append(fd)
-        assert lf.call_args_list == [mocker.call(fd, "0")]
+        assert lf.call_args_list == [mocker.call(fd, "[0] ")]
         lf0 = lf.return_value
         assert lf0.add_pattern.call_args_list == [mocker.call(pat, on_pattern)]
         assert lf0.print.call_count == 0
@@ -236,12 +236,12 @@ def test_logtee_2(mocker, tmp_path):
         "w"
     ) as f2:
         lt.append(f1)
-        assert lf.call_args_list == [mocker.call(f1, "0")]
+        assert lf.call_args_list == [mocker.call(f1, "[0] ")]
         # TODO: mocker doesn't give an easy way to distinguish multiple return values
         # so all calls below are doubled, as if they occurred on the same LogFile()
         lf0 = lf.return_value
         lt.append(f2)
-        assert lf.call_args_list == [mocker.call(f1, "0"), mocker.call(f2, "1")]
+        assert lf.call_args_list == [mocker.call(f1, "[0] "), mocker.call(f2, "[1] ")]
         lt.add_pattern(pat, on_pattern)
         assert lt.pattern is pat
         assert lf0.add_pattern.call_args_list == [
