@@ -195,12 +195,13 @@ def main(
                 "swift",
                 "run",
                 "FuzzilliCli",
-                "--maxIterations=1",
                 "--corpusImportMode=unminimized",
-                f"--timeout={opts.timeout or 3000}",
-                "--profile=spidermonkey",
                 f"--importCorpus={merger.queues_dir}",
+                f"--jobs={opts.instances}",
+                "--maxIterations=1",
+                "--profile=spidermonkey",
                 f"--storagePath={merger.updated_tests_dir}",
+                f"--timeout={opts.timeout or 3000}",
                 str(binary),
             ]
 
