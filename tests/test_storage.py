@@ -251,7 +251,7 @@ def test_cloudstorageprovider_02(csp, mocker):
     }
 
 
-def test_context_01(tmp_path):
+def test_context_raise(tmp_path):
     """refresh context raises, writes stats"""
     storage = LocalTestStorageProvider(tmp_path / "cloud")
     (storage.root / "t_proj").mkdir()
@@ -286,7 +286,7 @@ def test_context_01(tmp_path):
     assert stats["corpus_pre"] == "0"
 
 
-def test_context_02(mocker, tmp_path):
+def test_context_raise_during(mocker, tmp_path):
     """refresh context init raises, writes stats"""
     refresh_dir = tmp_path / "refresh"
     queues_dir = refresh_dir / "queues"
@@ -316,7 +316,7 @@ def test_context_02(mocker, tmp_path):
     assert storage.method_calls == []
 
 
-def test_context_03(tmp_path):
+def test_context_no_refresh(tmp_path):
     """refresh context does nothing, exits 2"""
     storage = LocalTestStorageProvider(tmp_path / "cloud")
     (storage.root / "t_proj").mkdir()
@@ -349,7 +349,7 @@ def test_context_03(tmp_path):
     assert stats["corpus_pre"] == "0"
 
 
-def test_context_04(tmp_path):
+def test_context_refresh(tmp_path):
     """refresh context does refresh, exits 0"""
     storage = LocalTestStorageProvider(tmp_path / "cloud")
     (storage.root / "t_proj").mkdir()
@@ -389,6 +389,49 @@ def test_context_04(tmp_path):
 
     with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
         assert set(zf.namelist()) == {"e", "f"}
+
+
+def test_context_refresh_suffix(tmp_path):
+    """refresh context only counts output suffix files"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+    # create corpus.zip
+    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w") as zf:
+        zf.writestr("a", b"")
+    # create existing queues
+    (storage.root / "t_proj" / "queues" / "queue1").mkdir(parents=True)
+    (storage.root / "t_proj" / "queues" / "queue1" / "b.bin").touch()
+    (storage.root / "t_proj" / "queues" / "queue1" / "c.bin").touch()
+    with ZipFile(storage.root / "t_proj" / "queues" / "queue2.zip", "w") as zf:
+        zf.writestr("d.txt", b"")
+
+    refresh_dir = tmp_path / "refresh"
+    tests_dir = refresh_dir / "tests"
+
+    opts = Namespace(
+        bucket="t_bucket",
+        corpus_refresh=refresh_dir,
+        project="t_proj",
+        provider="s3",
+        stats=tmp_path / "stats",
+    )
+
+    with CorpusRefreshContext(opts, storage, suffix=".txt") as ctx:
+        (tests_dir / "e.txt").touch()
+        (tests_dir / "f.txt").touch()
+        (tests_dir / "g.bin").touch()
+
+    assert ctx.exit_code == 0
+
+    stats = _read_stats(tmp_path / "stats")
+    assert stats["queue_files"] == "3"
+    assert stats["corpus_post"] == "2"
+    assert stats["corpus_pre"] == "1"
+
+    assert set(storage.iter_local()) == {storage.root / "t_proj" / "corpus.zip"}
+
+    with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
+        assert set(zf.namelist()) == {"e.txt", "f.txt"}
 
 
 def test_gcsfile_01(gcsfile):
