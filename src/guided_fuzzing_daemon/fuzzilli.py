@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 from argparse import Namespace
 from copy import copy
+from dataclasses import dataclass
 from logging import getLogger
 from pathlib import Path
 from subprocess import DEVNULL, Popen
@@ -141,29 +142,38 @@ def scan_crashes(
             )
 
 
+@dataclass
+class StatsCollectionData:
+    path: Path | None
+    lines: list[str]
+
+    def write(self) -> None:
+        assert self.path is not None
+        with self.path.open("w") as stats_f:
+            for st_line in self.lines:
+                print(st_line, file=stats_f)
+        self.lines.clear()
+
+    def add_line(self, line: str) -> None:
+        if self.lines:
+            if not line:
+                self.write()
+            else:
+                self.lines.append(line)
+        elif self.path is not None and line == "Fuzzer Statistics":
+            self.lines.append(line)
+
+
 def _poll(
     proc: Popen[str],
     logf: LogFile,
-    stats: Path | None,
-    in_stats: list[str],
+    stats: StatsCollectionData,
     flush: bool = False,
 ) -> int | None:
     """poll a Popen for stats on stdout"""
     for line in logf.lines(flush):
         LOG.debug(line)
-        if in_stats:
-            assert stats
-            if not line:
-                with stats.open("w") as stats_f:
-                    for st_line in in_stats:
-                        print(st_line, file=stats_f)
-                in_stats.clear()
-            else:
-                in_stats.append(line)
-        elif stats and line == "Fuzzer Statistics":
-            in_stats.append(line)
-        elif not line:
-            break
+        stats.add_line(line)
     return proc.poll()
 
 
@@ -267,7 +277,7 @@ def main(
     if opts.max_runtime == 0.0:
         opts.max_runtime = float("inf")
 
-    in_stats: list[str] = []
+    stats = StatsCollectionData(opts.stats, [])
 
     # Memorize the original corpus, so we can exclude it from uploading later
     if (opts.corpus_out / "corpus").is_dir():
@@ -305,7 +315,7 @@ def main(
                     corpus_syncer.upload_queue(original_corpus)
                     last_queue_upload = time()
 
-                if _poll(fuzzer_proc, logf, opts.stats, in_stats) is not None:
+                if _poll(fuzzer_proc, logf, stats) is not None:
                     LOG.warning("Fuzzilli exited")
                     break
 
@@ -314,12 +324,12 @@ def main(
                 LOG.info("max-runtime is up")
         finally:
             # terminate(), wait(10), kill(), wait()
-            if _poll(fuzzer_proc, logf, opts.stats, in_stats) is None:
+            if _poll(fuzzer_proc, logf, stats) is None:
                 fuzzer_proc.terminate()
                 start_term = time()
                 while start_term > time() - 10:
                     sleep(0.1)
-                    if _poll(fuzzer_proc, logf, opts.stats, in_stats) is not None:
+                    if _poll(fuzzer_proc, logf, stats) is not None:
                         break
                 else:
                     LOG.info("need to kill")
@@ -327,7 +337,7 @@ def main(
                     start_term = time()
                     while start_term > time() - 1:
                         sleep(0.1)
-                        if _poll(fuzzer_proc, logf, opts.stats, in_stats) is not None:
+                        if _poll(fuzzer_proc, logf, stats) is not None:
                             break
                     else:
                         LOG.warning(
@@ -337,6 +347,6 @@ def main(
             if opts.queue_upload:
                 corpus_syncer.upload_queue(original_corpus)
 
-        if _poll(fuzzer_proc, logf, opts.stats, in_stats, True) is None:
+        if _poll(fuzzer_proc, logf, stats, True) is None:
             return 1
         return fuzzer_proc.returncode
