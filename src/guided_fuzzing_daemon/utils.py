@@ -231,10 +231,10 @@ class LogFile:
             self.tee_buf = tail
             for line in lines.splitlines():
                 self.check_match(line)
-                print(f"[{self.prefix}] {line}")
+                print(f"{self.prefix}{line}")
         if flush and self.tee_buf:
             self.check_match(self.tee_buf)
-            print(f"[{self.prefix}] {self.tee_buf}")
+            print(f"{self.prefix}{self.tee_buf}")
             self.tee_buf = ""
 
 
@@ -261,7 +261,7 @@ class LogTee:
 
     def append(self, handle: TextIO) -> None:
         idx = len(self.open_files)
-        prefix = f"{idx:{self.instance_width}}"
+        prefix = f"[{idx:{self.instance_width}}] "
         lf = LogFile(handle, prefix)
         if self.pattern is not None and self.on_match is not None:
             lf.add_pattern(self.pattern, self.on_match)
