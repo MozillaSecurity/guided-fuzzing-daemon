@@ -8,7 +8,7 @@ from argparse import Namespace
 from copy import copy
 from logging import getLogger
 from pathlib import Path
-from subprocess import DEVNULL, PIPE, Popen
+from subprocess import DEVNULL, Popen
 from time import monotonic as time
 from time import sleep
 
@@ -25,7 +25,7 @@ from .storage import (
     CorpusRefreshContext,
     CorpusSyncer,
 )
-from .utils import create_envs, warn_local
+from .utils import LogFile, TempPath, create_envs, warn_local
 
 LOG = getLogger("gfd.fzli")
 
@@ -141,24 +141,29 @@ def scan_crashes(
             )
 
 
-def _poll(proc: Popen[str], stats: Path | None, in_stats: list[str]) -> int | None:
+def _poll(
+    proc: Popen[str],
+    logf: LogFile,
+    stats: Path | None,
+    in_stats: list[str],
+    flush: bool = False,
+) -> int | None:
     """poll a Popen for stats on stdout"""
-    assert proc.stdout is not None
-    while proc.stdout.readable():
-        line = proc.stdout.readline()
-        LOG.debug(line.rstrip())
-        if not line:
-            break
+    for line in logf.lines(flush):
+        LOG.debug(line)
         if in_stats:
             assert stats
-            if not line.rstrip():
+            if not line:
                 with stats.open("w") as stats_f:
-                    stats_f.writelines(in_stats)
+                    for st_line in in_stats:
+                        print(st_line, file=stats_f)
                 in_stats.clear()
             else:
                 in_stats.append(line)
-        elif stats and line.rstrip() == "Fuzzer Statistics":
+        elif stats and line == "Fuzzer Statistics":
             in_stats.append(line)
+        elif not line:
+            break
     return proc.poll()
 
 
@@ -272,57 +277,66 @@ def main(
 
     cmdline.append(str(binary))
 
-    # pylint: disable=consider-using-with
-    fuzzer_proc = Popen(
-        cmdline, stdout=PIPE, text=True, env=env, cwd=opts.fuzzilli_build_dir
-    )
-    try:
-        while opts.max_runtime > time() - start:
-            if collector:
-                scan_crashes(crashes_dir, collector, env, cfg)
+    with (
+        TempPath() as tmpd,
+        open(tmpd / "stdout.log", "w", encoding="utf-8") as fp,
+    ):
+        logf = LogFile(fp, "")
+        # pylint: disable=consider-using-with
+        fuzzer_proc = Popen(
+            cmdline, stdout=fp, text=True, env=env, cwd=opts.fuzzilli_build_dir
+        )
+        try:
+            while opts.max_runtime > time() - start:
+                if collector:
+                    scan_crashes(crashes_dir, collector, env, cfg)
 
-                # TODO: For now we don't do anything special with differential results
-                # and just act as if they were crashes, without trying to reproduce them
-                if diffs_dir.exists():
-                    scan_crashes(diffs_dir, collector, env, cfg, reproduce=False)
+                    # TODO: For now we don't do anything special with differential
+                    # results and just act as if they were crashes, without trying to
+                    # reproduce them
+                    if diffs_dir.exists():
+                        scan_crashes(diffs_dir, collector, env, cfg, reproduce=False)
 
-            # Only upload new corpus files periodically
-            if opts.queue_upload and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD:
-                corpus_syncer.upload_queue(original_corpus)
-                last_queue_upload = time()
+                # Only upload new corpus files periodically
+                if (
+                    opts.queue_upload
+                    and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD
+                ):
+                    corpus_syncer.upload_queue(original_corpus)
+                    last_queue_upload = time()
 
-            if _poll(fuzzer_proc, opts.stats, in_stats) is not None:
-                LOG.warning("Fuzzilli exited")
-                break
-
-            sleep(1)
-        else:
-            LOG.info("max-runtime is up")
-    finally:
-        # terminate(), wait(10), kill(), wait()
-        if _poll(fuzzer_proc, opts.stats, in_stats) is None:
-            fuzzer_proc.terminate()
-            start_term = time()
-            while start_term > time() - 10:
-                sleep(0.1)
-                if _poll(fuzzer_proc, opts.stats, in_stats) is not None:
+                if _poll(fuzzer_proc, logf, opts.stats, in_stats) is not None:
+                    LOG.warning("Fuzzilli exited")
                     break
+
+                sleep(1)
             else:
-                LOG.info("need to kill")
-                fuzzer_proc.kill()
+                LOG.info("max-runtime is up")
+        finally:
+            # terminate(), wait(10), kill(), wait()
+            if _poll(fuzzer_proc, logf, opts.stats, in_stats) is None:
+                fuzzer_proc.terminate()
                 start_term = time()
-                while start_term > time() - 1:
+                while start_term > time() - 10:
                     sleep(0.1)
-                    if _poll(fuzzer_proc, opts.stats, in_stats) is not None:
+                    if _poll(fuzzer_proc, logf, opts.stats, in_stats) is not None:
                         break
                 else:
-                    LOG.warning(
-                        "Process %d did not exit after SIGKILL", fuzzer_proc.pid
-                    )
+                    LOG.info("need to kill")
+                    fuzzer_proc.kill()
+                    start_term = time()
+                    while start_term > time() - 1:
+                        sleep(0.1)
+                        if _poll(fuzzer_proc, logf, opts.stats, in_stats) is not None:
+                            break
+                    else:
+                        LOG.warning(
+                            "Process %d did not exit after SIGKILL", fuzzer_proc.pid
+                        )
 
-        if opts.queue_upload:
-            corpus_syncer.upload_queue(original_corpus)
+            if opts.queue_upload:
+                corpus_syncer.upload_queue(original_corpus)
 
-    if _poll(fuzzer_proc, opts.stats, in_stats) is None:
-        return 1
-    return fuzzer_proc.returncode
+        if _poll(fuzzer_proc, logf, opts.stats, in_stats, True) is None:
+            return 1
+        return fuzzer_proc.returncode
