@@ -2,7 +2,6 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
-from io import StringIO
 from itertools import chain, count, repeat
 from logging import DEBUG
 from os import chdir
@@ -59,7 +58,6 @@ def fuzzilli_common(mocker, tmp_path):
             autospec=True,
             side_effect=[MainBreak, None],
         )
-        stdout = StringIO()
         # time() increasing by 1.0s every call
         time = mocker.patch(
             "guided_fuzzing_daemon.fuzzilli.time",
@@ -80,11 +78,11 @@ def fuzzilli_common(mocker, tmp_path):
                 return None
 
             self.popen.return_value.poll.side_effect = is_terminated
-            self.popen.return_value.stdout = self.stdout
             self.popen.return_value.pid = 1337
             self.popen.return_value.returncode = 2
 
-            def popen_touch_crashes(*_, **__):
+            def popen_touch_crashes(*_, **kwds):
+                self.stdout = kwds["stdout"]  # pylint: disable=attribute-defined-outside-init
                 if self.args.differential:
                     (self.corpus / "differentials").mkdir(exist_ok=True)
                 else:
@@ -329,7 +327,7 @@ def test_fuzzilli_06(fuzzilli, tmp_path):
 
     def popen_write_stats(*args, **kwds):
         result = orig_popen_cb(*args, **kwds)
-        fuzzilli.stdout.write("Fuzzer Statistics\nstats: 1234\n\n")
+        fuzzilli.stdout.write("Fuzzer Statistics\nstats: 1234\n\n\n")
         fuzzilli.stdout.seek(0)
         return result
 

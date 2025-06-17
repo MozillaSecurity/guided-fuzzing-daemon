@@ -217,7 +217,7 @@ class LogFile:
             if (match := self.pattern.match(line)) is not None:
                 self.on_match(line, match)
 
-    def print(self, flush: bool = False) -> None:
+    def lines(self, flush: bool = False) -> Iterator[str]:
         with Path(self.handle.name).open(encoding="utf-8") as read_file:
             read_file.seek(self.printed_pos)
             new_data = read_file.read()
@@ -229,13 +229,15 @@ class LogFile:
             lines, tail = lines_and_tail
             lines = f"{self.tee_buf}{lines}"
             self.tee_buf = tail
-            for line in lines.splitlines():
-                self.check_match(line)
-                print(f"{self.prefix}{line}")
+            yield from lines.splitlines()
         if flush and self.tee_buf:
-            self.check_match(self.tee_buf)
-            print(f"{self.prefix}{self.tee_buf}")
+            yield self.tee_buf
             self.tee_buf = ""
+
+    def print(self, flush: bool = False) -> None:
+        for line in self.lines(flush):
+            self.check_match(line)
+            print(f"{self.prefix}{line}")
 
 
 class LogTee:
