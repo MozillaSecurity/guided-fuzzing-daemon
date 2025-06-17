@@ -519,7 +519,15 @@ class CorpusSyncer:
         with TempPath() as tmpd:
             with Executor() as executor:
                 for file in self.provider.iter(prefix):
-                    queue_name = file.path.parts[2]  # skip project and "queues" folders
+                    try:
+                        # skip project and "queues" folders
+                        queue_name = file.path.parts[2]
+                    except IndexError:
+                        # this happens when a "folder" is created in the web console
+                        # GCS eg. creates a zero-byte object which makes the "folder"
+                        # appear even if it contains no objects
+                        LOG.warning("skipping invalid path: %s", file.path)
+                        continue
                     # Only unzip when file was named `queues/*.zip`.
                     # A target could use .zip for its testcases
                     # and we shouldn't try to unzip those.

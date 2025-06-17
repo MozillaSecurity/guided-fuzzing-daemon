@@ -62,9 +62,10 @@ class LocalTestStorageFile(CloudStorageFile):
 
 
 class LocalTestStorageProvider(CloudStorageProvider):
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, list_returns_folder: str | None = None) -> None:
         super().__init__("")  # bucket_name -> don't care
         self.root = root
+        self.list_returns_folder = list_returns_folder
         root.mkdir(parents=True, exist_ok=True)
 
     def iter(self, prefix: PurePosixPath):
@@ -77,7 +78,7 @@ class LocalTestStorageProvider(CloudStorageProvider):
 
     def iter_local(self):
         for f in self.root.glob("**/*"):
-            if f.is_file():
+            if f.is_file() or str(f.relative_to(self.root)) == self.list_returns_folder:
                 yield f
 
     def iter_projects(self, prefix: str = ""):
@@ -937,7 +938,9 @@ def test_syncer_delete_queues(tmp_path):
 
 def test_syncer_download_queues(tmp_path):
     """test download_queues()"""
-    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    storage = LocalTestStorageProvider(
+        tmp_path / "cloud", list_returns_folder="t_proj/queues"
+    )
     # pre-zip queue
     (storage.root / "t_proj" / "queues" / "queue1").mkdir(parents=True)
     (storage.root / "t_proj" / "queues" / "queue1" / "a").touch()
