@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     if opts.corpus_download:
         opts.corpus_download.mkdir(exist_ok=True, parents=True)
         syncer = CorpusSyncer(storage, Corpus(opts.corpus_download), opts.project)
-        syncer.download_corpus(opts.corpus_download_size)
+        syncer.download_corpus()
         return 0
 
     if opts.corpus_status:

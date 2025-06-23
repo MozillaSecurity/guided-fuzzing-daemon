@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from logging import getLogger
 from pathlib import Path, PurePosixPath
-from random import sample
 from shutil import rmtree
 from time import perf_counter
 from typing import Any, Iterable, Iterator
@@ -366,7 +365,7 @@ class CorpusSyncer:
             self.project = PurePosixPath(project)
         self.suffix = suffix
 
-    def download_corpus(self, random_subset_size: int | None = None) -> int:
+    def download_corpus(self) -> int:
         assert self.project is not None
         start = perf_counter()
 
@@ -390,19 +389,8 @@ class CorpusSyncer:
                 corpus_zip_remote.download_to_file(corpus_zip_local)
 
                 with ZipFile(corpus_zip_local) as zfp:
-                    files = zfp.infolist()
-                    n_files += len(files)
-
-                    if random_subset_size is not None:
-                        LOG.info(
-                            "selecting %d files at random from %d total corpus files",
-                            random_subset_size,
-                            n_files,
-                        )
-                        files = sample(files, random_subset_size)
-
-                    for file in files:
-                        zfp.extract(file, self.corpus.path)
+                    for file_name in zfp.namelist():
+                        zfp.extract(file_name, self.corpus.path)
                         downloaded += 1
 
         LOG.info(
