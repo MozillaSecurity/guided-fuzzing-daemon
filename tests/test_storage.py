@@ -104,13 +104,6 @@ def _patches(mocker, monkeypatch):
 
     obj.submit.side_effect = _fake_submit
 
-    sample = mocker.patch("guided_fuzzing_daemon.storage.sample", autospec=True)
-
-    def _fake_sample(iterable, count):
-        return iterable[:count]
-
-    sample.side_effect = _fake_sample
-
     mocker.patch("guided_fuzzing_daemon.stats.CPU_POLL_INTERVAL", 0)
 
     # Mocked AWS Credentials for boto3.
@@ -807,26 +800,6 @@ def test_syncer_download_corpus(tmp_path):
     assert (out_path / "file1").is_file()
     assert (out_path / "file2").is_file()
     assert (out_path / "file3").is_file()
-
-
-def test_syncer_download_corpus_subset(tmp_path):
-    """test download_corpus(random subset)"""
-    storage = LocalTestStorageProvider(tmp_path / "cloud")
-    (storage.root / "t_proj").mkdir()
-    # create corpus.zip
-    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w") as zf:
-        zf.writestr("file1", b"")
-        zf.writestr("file2", b"")
-        zf.writestr("file3", b"")
-
-    out_path = tmp_path / "out"
-    corpus = Corpus(out_path)
-    syncer = CorpusSyncer(storage, corpus, "t_proj")
-    assert syncer.download_corpus(1) == 1
-
-    assert (out_path / "file1").is_file()
-    assert not (out_path / "file2").is_file()
-    assert not (out_path / "file2").is_file()
 
 
 def test_syncer_upload_corpus(tmp_path):
