@@ -35,13 +35,15 @@ class _TestExc(Exception):
 
 class LocalTestStorageFile(CloudStorageFile):
     def __init__(self, name: PurePosixPath, root: Path) -> None:
-        super().__init__(name, None)
+        super().__init__(name, None, None)
         self._root = root
 
     def _refresh(self) -> None:
+        file_object = self._root / self.path
         self._modified = datetime.fromtimestamp(
-            (self._root / self.path).stat().st_mtime, timezone.utc
+            file_object.stat().st_mtime, timezone.utc
         )
+        self._size = file_object.stat().st_size
 
     def download_to_file(self, dest: Path) -> None:
         copyfile(self._root / self.path, dest)
@@ -153,7 +155,9 @@ def mock_gcs(mocker):
 
 @pytest.fixture(name="gcsfile")
 def mock_gcs_file(gcs):
-    return GCSFile(name=PurePosixPath("test_file.txt"), modified=None, _provider=gcs)
+    return GCSFile(
+        name=PurePosixPath("test_file.txt"), modified=None, size=None, _provider=gcs
+    )
 
 
 @pytest.fixture(name="stubber")
@@ -166,7 +170,7 @@ def mock_stubber(s3storage):
 @pytest.fixture(name="s3file")
 def mock_s3file(s3storage):
     mock_name = PurePosixPath("test_file.txt")
-    return S3File(name=mock_name, modified=None, _provider=s3storage)
+    return S3File(name=mock_name, modified=None, size=None, _provider=s3storage)
 
 
 @pytest.fixture(name="s3storage")
@@ -557,7 +561,7 @@ def test_s3file_01(s3file, stubber):
     """test S3File.refresh()"""
     stubber.add_response(
         "head_object",
-        {"LastModified": datetime(2023, 8, 24)},
+        {"LastModified": datetime(2023, 8, 24), "ContentLength": 446284},
         {"Bucket": "test-bucket", "Key": "test_file.txt"},
     )
     assert s3file._modified is None  # pylint: disable=protected-access
@@ -694,11 +698,13 @@ def test_s3storage_01(s3storage, stubber):
             S3File(
                 name=PurePosixPath("test_file1.txt"),
                 modified=None,
+                size=None,
                 _provider=s3storage,
             ),
             S3File(
                 name=PurePosixPath("test_file2.txt"),
                 modified=None,
+                size=None,
                 _provider=s3storage,
             ),
         ]
@@ -711,7 +717,11 @@ def test_s3storage_02(s3storage, stubber):
         "list_objects_v2",
         {
             "Contents": [
-                {"Key": "prefix/test_file1.txt", "LastModified": datetime(2023, 8, 23)},
+                {
+                    "Size": 446284,
+                    "Key": "prefix/test_file1.txt",
+                    "LastModified": datetime(2023, 8, 23),
+                },
             ],
             "IsTruncated": True,
             "NextContinuationToken": "token123",
@@ -722,7 +732,11 @@ def test_s3storage_02(s3storage, stubber):
         "list_objects_v2",
         {
             "Contents": [
-                {"Key": "prefix/test_file2.txt", "LastModified": datetime(2023, 8, 24)},
+                {
+                    "Size": 446284,
+                    "Key": "prefix/test_file2.txt",
+                    "LastModified": datetime(2023, 8, 24),
+                },
             ],
             "IsTruncated": False,
         },

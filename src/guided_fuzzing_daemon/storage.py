@@ -50,9 +50,12 @@ class Corpus:
 
 
 class CloudStorageFile(ABC):
-    def __init__(self, name: PurePosixPath, modified: datetime | None):
+    def __init__(
+        self, name: PurePosixPath, modified: datetime | None, size: int | None
+    ):
         self.path = name
         self._modified = modified
+        self._size = size if size is not None else 0
         self._have_meta = modified is not None
 
     @abstractmethod
@@ -65,6 +68,13 @@ class CloudStorageFile(ABC):
             self._refresh()
         assert self._modified is not None
         return self._modified
+
+    @property
+    def size(self) -> int:
+        if not self._have_meta:
+            self._refresh()
+        assert self._size is not None
+        return self._size
 
     @abstractmethod
     def download_to_file(self, dest: Path) -> None:
@@ -150,9 +160,10 @@ class S3File(CloudStorageFile):
         self,
         name: PurePosixPath,
         modified: datetime | None,
+        size: int | None,
         _provider: S3Storage,
     ) -> None:
-        super().__init__(name, modified)
+        super().__init__(name, modified, size)
         self._provider = _provider
 
     def _refresh(self) -> None:
@@ -160,6 +171,7 @@ class S3File(CloudStorageFile):
             Bucket=self._provider.bucket_name, Key=str(self.path)
         )
         self._modified = resp["LastModified"]
+        self._size = resp["ContentLength"]
         self._have_meta = True
 
     def download_to_file(self, dest: Path) -> None:
@@ -236,7 +248,12 @@ class S3Storage(CloudStorageProvider):
             Bucket=self.bucket_name, Prefix=f"{prefix}/"
         )
         for obj in result.get("Contents", ()):
-            yield S3File(PurePosixPath(obj["Key"]), obj["LastModified"], self)
+            yield S3File(
+                PurePosixPath(obj["Key"]),
+                obj["LastModified"],
+                obj["Size"],
+                self,
+            )
         while result["IsTruncated"]:
             result = self.client.list_objects_v2(
                 Bucket=self.bucket_name,
@@ -244,7 +261,12 @@ class S3Storage(CloudStorageProvider):
                 ContinuationToken=result["NextContinuationToken"],
             )
             for obj in result["Contents"]:
-                yield S3File(PurePosixPath(obj["Key"]), obj["LastModified"], self)
+                yield S3File(
+                    PurePosixPath(obj["Key"]),
+                    obj["LastModified"],
+                    obj["Size"],
+                    self,
+                )
 
     def iter_projects(self, prefix: str = "") -> Iterable[str]:
         result = self.client.list_objects_v2(
@@ -265,7 +287,7 @@ class S3Storage(CloudStorageProvider):
                 yield obj["Prefix"][:-1]  # trim trailing delimiter
 
     def __getitem__(self, name: PurePosixPath) -> CloudStorageFile:
-        return S3File(name, None, self)
+        return S3File(name, None, None, self)
 
 
 class GCSFile(CloudStorageFile):
@@ -273,14 +295,17 @@ class GCSFile(CloudStorageFile):
         self,
         name: PurePosixPath,
         modified: datetime | None,
+        size: int | None,
         _provider: GoogleCloudStorage,
     ) -> None:
-        super().__init__(name, modified)
+        super().__init__(name, modified, size)
         self._provider = _provider
 
     def _refresh(self) -> None:
         blob = self._provider.bucket.blob(str(self.path))
+        blob.reload()
         self._modified = blob.updated
+        self._size = blob.size if blob.size is not None else 0
         self._have_meta = True
 
     def download_to_file(self, dest: Path) -> None:
@@ -327,7 +352,7 @@ class GoogleCloudStorage(CloudStorageProvider):
 
     def iter(self, prefix: PurePosixPath) -> Iterator[CloudStorageFile]:
         for blob in self.bucket.list_blobs(prefix=f"{prefix}/"):
-            yield GCSFile(PurePosixPath(blob.name), blob.updated, self)
+            yield GCSFile(PurePosixPath(blob.name), blob.updated, blob.size, self)
 
     def iter_projects(self, prefix: str = "") -> Iterable[str]:
         blobs = self.bucket.list_blobs(prefix=prefix, delimiter="/")
@@ -338,7 +363,7 @@ class GoogleCloudStorage(CloudStorageProvider):
             yield result[:-1]  # trim trailing delimiter
 
     def __getitem__(self, name: PurePosixPath) -> CloudStorageFile:
-        return GCSFile(name, None, self)
+        return GCSFile(name, None, None, self)
 
 
 @dataclass(init=False)
