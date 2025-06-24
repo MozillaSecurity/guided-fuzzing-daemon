@@ -31,6 +31,7 @@ from .storage import (
     Corpus,
     CorpusSyncer,
     GoogleCloudStorage,
+    ResourceType,
     S3Storage,
 )
 
@@ -67,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     if opts.corpus_download:
         opts.corpus_download.mkdir(exist_ok=True, parents=True)
         syncer = CorpusSyncer(storage, Corpus(opts.corpus_download), opts.project)
-        syncer.download_corpus()
+        syncer.download_resource(ResourceType.CORPUS)
         return 0
 
     if opts.corpus_status:
@@ -92,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if opts.queue_download:
         syncer = CorpusSyncer(storage, Corpus(opts.queue_download), opts.project)
-        syncer.download_queues()
+        syncer.download_resource(ResourceType.QUEUE)
         return 0
 
     if opts.queue_status:

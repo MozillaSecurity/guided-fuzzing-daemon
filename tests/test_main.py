@@ -39,7 +39,7 @@ def test_main_01(arg, mocker, tmp_path):
 
     main()
     if arg == "corpus_download":
-        assert syncer.download_corpus.called
+        assert syncer.download_resource.called
     elif arg == "corpus_status":
         assert storage.get_corpus_status.called
     elif arg == "corpus_upload":
@@ -47,7 +47,7 @@ def test_main_01(arg, mocker, tmp_path):
     elif arg == "list_projects":
         assert storage.iter_projects.called
     elif arg == "queue_download":
-        assert syncer.download_queues.called
+        assert syncer.download_resource.called
     elif arg == "queue_status":
         assert storage.get_queue_status.called
 

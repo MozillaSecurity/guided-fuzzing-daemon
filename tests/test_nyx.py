@@ -14,7 +14,11 @@ from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Signatures.CrashInfo import TraceParsingError
 
 from guided_fuzzing_daemon.nyx import nyx_main
-from guided_fuzzing_daemon.storage import CloudStorageFile, CloudStorageProvider
+from guided_fuzzing_daemon.storage import (
+    CloudStorageFile,
+    CloudStorageProvider,
+    ResourceType,
+)
 
 
 class NyxMainBreak(Exception):
@@ -615,10 +619,11 @@ def test_nyx_refresh_02(mocker, nyx, tmp_path):
         (tmp_path / "refresh" / "tests" / "min.bin").touch()
         return mocker.DEFAULT
 
-    def download_corpus():
+    def download_corpus(_path: ResourceType):
         (tmp_path / "refresh" / "queues" / "config.sh").touch()
+        return mocker.DEFAULT
 
-    syncer.return_value.download_corpus.side_effect = download_corpus
+    syncer.return_value.download_resource.side_effect = download_corpus
     nyx.args.stats = tmp_path / "stats"
     nyx.popen.side_effect = fake_run
     nyx.popen.return_value.poll.side_effect = chain(repeat(None, 35), [0])
@@ -631,8 +636,8 @@ def test_nyx_refresh_02(mocker, nyx, tmp_path):
     # check
     assert result == 0
     assert syncer.return_value.method_calls == [
-        mocker.call.download_corpus(),
-        mocker.call.download_queues(),
+        mocker.call.download_resource(ResourceType.CORPUS),
+        mocker.call.download_resource(ResourceType.QUEUE),
         mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]
