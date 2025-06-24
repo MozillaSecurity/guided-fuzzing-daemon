@@ -12,7 +12,11 @@ from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
 
 from guided_fuzzing_daemon.afl import afl_main
-from guided_fuzzing_daemon.storage import CloudStorageFile, CloudStorageProvider
+from guided_fuzzing_daemon.storage import (
+    CloudStorageFile,
+    CloudStorageProvider,
+    ResourceType,
+)
 
 
 class MainBreak(Exception):
@@ -693,8 +697,8 @@ def test_afl_refresh_02(afl, mocker, tmp_path):
     # check
     assert result == 0
     assert syncer.return_value.method_calls == [
-        mocker.call.download_corpus(),
-        mocker.call.download_queues(),
+        mocker.call.download_resource(ResourceType.CORPUS),
+        mocker.call.download_resource(ResourceType.QUEUE),
         mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]

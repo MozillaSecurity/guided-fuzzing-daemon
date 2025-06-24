@@ -15,7 +15,11 @@ from guided_fuzzing_daemon.libfuzzer import (
     LibFuzzerStats,
     libfuzzer_main,
 )
-from guided_fuzzing_daemon.storage import CloudStorageFile, CloudStorageProvider
+from guided_fuzzing_daemon.storage import (
+    CloudStorageFile,
+    CloudStorageProvider,
+    ResourceType,
+)
 
 
 @pytest.fixture(name="libf")
@@ -458,8 +462,8 @@ def test_libfuzzer_refresh_01(libf, mocker, tmp_path):
     # check
     assert result == 0
     assert syncer.return_value.method_calls == [
-        mocker.call.download_corpus(),
-        mocker.call.download_queues(),
+        mocker.call.download_resource(ResourceType.CORPUS),
+        mocker.call.download_resource(ResourceType.QUEUE),
         mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]
