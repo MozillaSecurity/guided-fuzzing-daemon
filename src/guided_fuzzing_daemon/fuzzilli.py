@@ -202,8 +202,12 @@ def main(
                 "--profile=spidermonkey",
                 f"--storagePath={merger.updated_tests_dir}",
                 f"--timeout={opts.timeout or 3000}",
-                str(binary),
             ]
+
+            if opts.wasm:
+                cmdline.append("--wasm")
+
+            cmdline.append(str(binary))
 
             LOG.info("Running Fuzzilli merge")
             # pylint: disable=consider-using-with
