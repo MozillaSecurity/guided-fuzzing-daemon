@@ -169,9 +169,11 @@ def afl_main(
                 str(timeout),
                 "-m",
                 "none",
-                str(binary),
                 "-T",
                 str(opts.instances),
+                "--",
+                str(binary),
+                *opts.rargs[1:],
             ]
 
             LOG.info("Running afl-cmin")
@@ -336,6 +338,7 @@ def afl_main(
                             str(opts.corpus_out.resolve()),
                             "--",
                             str(binary),
+                            *opts.rargs[1:],
                         ],
                         text=True,
                         env=this_env,
