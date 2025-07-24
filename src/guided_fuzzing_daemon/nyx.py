@@ -205,6 +205,12 @@ def nyx_main(
                             for additional_corpus in opts.afl_add_corpus:
                                 cmd.extend(("-F", str(additional_corpus)))
 
+                    if opts.max_fuzz_runs:
+                        cmd.extend(("-E", f"{opts.max_fuzz_runs}"))
+
+                    if opts.max_fuzz_time:
+                        cmd.extend(("-V", f"{opts.max_fuzz_time}"))
+
                     # environment settings that apply to this instance
                     this_env = envs[idx].copy()
                     if opts.afl_async_corpus and not idx:

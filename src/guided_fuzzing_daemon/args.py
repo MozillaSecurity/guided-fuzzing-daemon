@@ -412,6 +412,16 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         "(applies to Nyx)",
     )
     afl_group.add_argument(
+        "--max-fuzz-time",
+        type=int,
+        help="Specify maximum runtime of the fuzzer (applies to Nyx)",
+    )
+    afl_group.add_argument(
+        "--max-fuzz-runs",
+        type=int,
+        help="Specify maximum executions of the fuzzer (approximate, applies to Nyx)",
+    )
+    afl_group.add_argument(
         "--corpus-in",
         "-i",
         type=Path,

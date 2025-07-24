@@ -601,6 +601,52 @@ def test_afl_13(afl, mocker, tmp_path):
     }
 
 
+@pytest.mark.parametrize("max_fuzz_time", (None, 10))
+def test_afl_14(afl, max_fuzz_time, tmp_path):
+    """afl max fuzz time"""
+    # setup
+    afl.args.max_fuzz_time = max_fuzz_time
+    afl.sleep.side_effect = chain(repeat(None, 60), [MainBreak, None])
+
+    # test
+    chdir(tmp_path)
+    with pytest.raises(MainBreak):
+        afl_main(afl.args, afl.collector, afl.s3m)
+
+    popen_calls = afl.popen.call_args_list
+    assert len(popen_calls) == 1
+    if max_fuzz_time:
+        assert popen_calls[0].args[0][popen_calls[0].args[0].index("-V") + 1] == str(
+            max_fuzz_time
+        )
+    else:
+        with pytest.raises(ValueError):
+            popen_calls[0].args[0].index("-V")
+
+
+@pytest.mark.parametrize("max_fuzz_runs", (None, 10))
+def test_afl_15(afl, max_fuzz_runs, tmp_path):
+    """afl max fuzz runs"""
+    # setup
+    afl.args.max_fuzz_runs = max_fuzz_runs
+    afl.sleep.side_effect = chain(repeat(None, 60), [MainBreak, None])
+
+    # test
+    chdir(tmp_path)
+    with pytest.raises(MainBreak):
+        afl_main(afl.args, afl.collector, afl.s3m)
+
+    popen_calls = afl.popen.call_args_list
+    assert len(popen_calls) == 1
+    if max_fuzz_runs:
+        assert popen_calls[0].args[0][popen_calls[0].args[0].index("-E") + 1] == str(
+            max_fuzz_runs
+        )
+    else:
+        with pytest.raises(ValueError):
+            popen_calls[0].args[0].index("-E")
+
+
 def test_afl_refresh_01(afl, mocker, tmp_path):
     """AFL corpus refresh cmin"""
     # setup
