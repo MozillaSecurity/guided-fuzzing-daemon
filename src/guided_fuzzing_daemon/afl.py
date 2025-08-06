@@ -16,7 +16,6 @@ from time import sleep, time
 from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
 from FTB.Running.AutoRunner import AutoRunner
-from FTB.Signatures.CrashInfo import CrashInfo
 
 from .stats import (
     STATS_UPLOAD_PERIOD,
@@ -367,6 +366,8 @@ def afl_main(
                         or (
                             crash_path.parent / f"{crash_path.name}.processed"
                         ).is_file()
+                        or crash_path.suffix == ".norepro"
+                        or (crash_path.parent / f"{crash_path.name}.norepro").is_file()
                     ):
                         continue
 
@@ -387,13 +388,14 @@ def afl_main(
                     if runner.run():
                         crash_info = runner.getCrashInfo(cfgs[crashing_instance])
                     else:
-                        crash_info = CrashInfo.fromRawCrashData(
-                            [], [], cfgs[crashing_instance]
-                        )
                         LOG.warning(
-                            "Warning: Failed to reproduce the given crash, submitting "
-                            "without crash information.",
+                            "Warning: Failed to reproduce the given crash, "
+                            "not submitting."
                         )
+                        crash_path.rename(
+                            crash_path.parent / f"{crash_path.name}.norepro"
+                        )
+                        continue
 
                     (sigfile, metadata) = collector.search(crash_info)
 

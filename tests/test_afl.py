@@ -61,7 +61,6 @@ def afl_common(mocker, tmp_path):
         collector = mocker.Mock(spec=Collector)
         corpus_in = tmp_path / "corpus"
         corpus_out = tmp_path / "corpus.out"
-        crash_info = mocker.patch("guided_fuzzing_daemon.afl.CrashInfo", autospec=True)
         popen = mocker.patch("guided_fuzzing_daemon.afl.Popen", autospec=True)
         s3m = mocker.Mock(spec=CloudStorageProvider)
         s3m.iter.side_effect = iter_impl
@@ -286,17 +285,17 @@ def test_afl_04(afl, autorun_repro, dupe, have_collector, tmp_path):
 
     # check
     if have_collector:
-        assert (afl.corpus_out / "0" / "crashes" / "crash.processed").exists()
         assert not (afl.corpus_out / "0" / "crashes" / "crash").exists()
         assert runner.run.call_count == 1
-        if autorun_repro:
-            assert afl.crash_info.fromRawCrashData.call_count == 0
-        else:
-            assert afl.crash_info.fromRawCrashData.call_count == 1
-        if dupe:
+        if not autorun_repro:
             assert afl.collector.submit.call_count == 0
+            assert (afl.corpus_out / "0" / "crashes" / "crash.norepro").exists()
         else:
-            assert afl.collector.submit.call_count == 1
+            assert (afl.corpus_out / "0" / "crashes" / "crash.processed").exists()
+            if dupe:
+                assert afl.collector.submit.call_count == 0
+            else:
+                assert afl.collector.submit.call_count == 1
     else:
         assert runner.run.call_count == 0
         assert not (afl.corpus_out / "0" / "crashes" / "crash.processed").is_file()
