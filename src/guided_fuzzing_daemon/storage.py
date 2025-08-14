@@ -8,9 +8,9 @@ from abc import ABC, abstractmethod
 from argparse import Namespace
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from logging import getLogger
 from pathlib import Path, PurePosixPath
-from random import sample
 from shutil import rmtree
 from time import perf_counter
 from typing import Any, Iterable, Iterator
@@ -51,9 +51,12 @@ class Corpus:
 
 
 class CloudStorageFile(ABC):
-    def __init__(self, name: PurePosixPath, modified: datetime | None):
+    def __init__(
+        self, name: PurePosixPath, modified: datetime | None, size: int | None
+    ):
         self.path = name
         self._modified = modified
+        self._size = size if size is not None else 0
         self._have_meta = modified is not None
 
     @abstractmethod
@@ -66,6 +69,13 @@ class CloudStorageFile(ABC):
             self._refresh()
         assert self._modified is not None
         return self._modified
+
+    @property
+    def size(self) -> int:
+        if not self._have_meta:
+            self._refresh()
+        assert self._size is not None
+        return self._size
 
     @abstractmethod
     def download_to_file(self, dest: Path) -> None:
@@ -151,9 +161,10 @@ class S3File(CloudStorageFile):
         self,
         name: PurePosixPath,
         modified: datetime | None,
+        size: int | None,
         _provider: S3Storage,
     ) -> None:
-        super().__init__(name, modified)
+        super().__init__(name, modified, size)
         self._provider = _provider
 
     def _refresh(self) -> None:
@@ -161,6 +172,7 @@ class S3File(CloudStorageFile):
             Bucket=self._provider.bucket_name, Key=str(self.path)
         )
         self._modified = resp["LastModified"]
+        self._size = resp["ContentLength"]
         self._have_meta = True
 
     def download_to_file(self, dest: Path) -> None:
@@ -237,7 +249,12 @@ class S3Storage(CloudStorageProvider):
             Bucket=self.bucket_name, Prefix=f"{prefix}/"
         )
         for obj in result.get("Contents", ()):
-            yield S3File(PurePosixPath(obj["Key"]), obj["LastModified"], self)
+            yield S3File(
+                PurePosixPath(obj["Key"]),
+                obj["LastModified"],
+                obj["Size"],
+                self,
+            )
         while result["IsTruncated"]:
             result = self.client.list_objects_v2(
                 Bucket=self.bucket_name,
@@ -245,7 +262,12 @@ class S3Storage(CloudStorageProvider):
                 ContinuationToken=result["NextContinuationToken"],
             )
             for obj in result["Contents"]:
-                yield S3File(PurePosixPath(obj["Key"]), obj["LastModified"], self)
+                yield S3File(
+                    PurePosixPath(obj["Key"]),
+                    obj["LastModified"],
+                    obj["Size"],
+                    self,
+                )
 
     def iter_projects(self, prefix: str = "") -> Iterable[str]:
         result = self.client.list_objects_v2(
@@ -266,7 +288,7 @@ class S3Storage(CloudStorageProvider):
                 yield obj["Prefix"][:-1]  # trim trailing delimiter
 
     def __getitem__(self, name: PurePosixPath) -> CloudStorageFile:
-        return S3File(name, None, self)
+        return S3File(name, None, None, self)
 
 
 class GCSFile(CloudStorageFile):
@@ -274,14 +296,17 @@ class GCSFile(CloudStorageFile):
         self,
         name: PurePosixPath,
         modified: datetime | None,
+        size: int | None,
         _provider: GoogleCloudStorage,
     ) -> None:
-        super().__init__(name, modified)
+        super().__init__(name, modified, size)
         self._provider = _provider
 
     def _refresh(self) -> None:
         blob = self._provider.bucket.blob(str(self.path))
+        blob.reload()
         self._modified = blob.updated
+        self._size = blob.size if blob.size is not None else 0
         self._have_meta = True
 
     def download_to_file(self, dest: Path) -> None:
@@ -328,7 +353,7 @@ class GoogleCloudStorage(CloudStorageProvider):
 
     def iter(self, prefix: PurePosixPath) -> Iterator[CloudStorageFile]:
         for blob in self.bucket.list_blobs(prefix=f"{prefix}/"):
-            yield GCSFile(PurePosixPath(blob.name), blob.updated, self)
+            yield GCSFile(PurePosixPath(blob.name), blob.updated, blob.size, self)
 
     def iter_projects(self, prefix: str = "") -> Iterable[str]:
         blobs = self.bucket.list_blobs(prefix=prefix, delimiter="/")
@@ -339,7 +364,12 @@ class GoogleCloudStorage(CloudStorageProvider):
             yield result[:-1]  # trim trailing delimiter
 
     def __getitem__(self, name: PurePosixPath) -> CloudStorageFile:
-        return GCSFile(name, None, self)
+        return GCSFile(name, None, None, self)
+
+
+class ResourceType(str, Enum):
+    QUEUE = "queues"
+    CORPUS = "corpus"
 
 
 @dataclass(init=False)
@@ -365,53 +395,6 @@ class CorpusSyncer:
         else:
             self.project = PurePosixPath(project)
         self.suffix = suffix
-
-    def download_corpus(self, random_subset_size: int | None = None) -> int:
-        assert self.project is not None
-        start = perf_counter()
-
-        downloaded = 0
-        n_files = 0
-
-        # download legacy (unzipped) corpus
-        with Executor() as executor:
-            prefix = self.project / "corpus"
-            for remote_file in self.provider.iter(prefix):
-                out_path = self.corpus.path / remote_file.path.name
-                assert not out_path.exists()
-                executor.submit(remote_file.download_to_file, out_path)
-                downloaded += 1
-            n_files += downloaded
-
-        with TempPath() as tmpd:
-            corpus_zip_remote = self.provider[self.project / "corpus.zip"]
-            corpus_zip_local = tmpd / "corpus.zip"
-            if corpus_zip_remote.exists():
-                corpus_zip_remote.download_to_file(corpus_zip_local)
-
-                with ZipFile(corpus_zip_local) as zfp:
-                    files = zfp.infolist()
-                    n_files += len(files)
-
-                    if random_subset_size is not None:
-                        LOG.info(
-                            "selecting %d files at random from %d total corpus files",
-                            random_subset_size,
-                            n_files,
-                        )
-                        files = sample(files, random_subset_size)
-
-                    for file in files:
-                        zfp.extract(file, self.corpus.path)
-                        downloaded += 1
-
-        LOG.info(
-            "download_corpus() -> downloaded=%d, total=%d (%.03fs)",
-            downloaded,
-            n_files,
-            perf_counter() - start,
-        )
-        return downloaded
 
     def upload_corpus(self) -> None:
         assert self.project is not None
@@ -506,75 +489,61 @@ class CorpusSyncer:
             perf_counter() - start,
         )
 
-    def download_queues(self) -> dict[str, int]:
+    def download_resource(self, target: ResourceType) -> int:
         assert self.project is not None
         start = perf_counter()
-        # download all queue files to corpus
-        status_data = {}
-        downloaded = 0
-        dupes = 0
-        zips = []
 
-        prefix = self.project / "queues"
+        paths = [self.project / target.value]
+        if target == ResourceType.CORPUS:
+            paths.append(self.project / "corpus.zip")
+
+        total = 0
+        downloaded = 0
+        duplicates = 0
+
+        zips = []
         with TempPath() as tmpd:
             with Executor() as executor:
-                for file in self.provider.iter(prefix):
-                    try:
-                        # skip project and "queues" folders
-                        queue_name = file.path.parts[2]
-                    except IndexError:
-                        # this happens when a "folder" is created in the web console
-                        # GCS eg. creates a zero-byte object which makes the "folder"
-                        # appear even if it contains no objects
-                        LOG.warning("skipping invalid path: %s", file.path)
-                        continue
-                    # Only unzip when file was named `queues/*.zip`.
-                    # A target could use .zip for its testcases
-                    # and we shouldn't try to unzip those.
-                    if queue_name.endswith(".zip"):
-                        queue_name = queue_name[:-4]
-                        out_path = tmpd / file.path.name
-                        zips.append(out_path)
-                    # legacy path for zip queues
-                    elif file.path.suffix == ".zip" and file.path.stem == queue_name:
-                        out_path = tmpd / file.path.name
-                        zips.append(out_path)
-                    else:
-                        # download directly to corpus path
-                        out_path = self.corpus.path / file.path.name
+                for path in paths:
+                    for file in self.provider.iter(path):
+                        if not file.size > 0:
+                            LOG.warning("skipping invalid path: %s", file.path)
+                            continue
+                        if file.path.suffix == ".zip":
+                            out_path = tmpd / file.path.name
+                            zips.append(out_path)
+                        else:
+                            # download directly to corpus path
+                            out_path = self.corpus.path / file.path.name
+                            total += 1
 
-                    if queue_name not in status_data:
-                        status_data[queue_name] = 0
-                    status_data[queue_name] += 1
-
-                    executor.submit(file.download_to_file, out_path)
-                    downloaded += 1
+                        executor.submit(file.download_to_file, out_path)
+                        downloaded += 1
 
             extracted = 0
             for zip_file in zips:
-                queue_name = zip_file.stem
-                assert queue_name in status_data
                 with ZipFile(zip_file) as zf:
-                    for file_name in zf.namelist():
-                        status_data[queue_name] += 1
-                        extracted_path = self.corpus.path / file_name
-                        if extracted_path.exists():
-                            dupes += 1
+                    for entry in zf.infolist():
+                        total += 1
+                        if (self.corpus.path / entry.filename).exists():
+                            duplicates += 1
                         else:
-                            zf.extract(file_name, self.corpus.path)
+                            zf.extract(entry.filename, self.corpus.path)
                             extracted += 1
                 zip_file.unlink()
-                status_data[queue_name] -= 1
 
         LOG.info(
-            "download_queues() -> downloaded=%d, extracted=%d, skipped=%d (%.03fs)",
+            "download_resources() -> "
+            + "path=%s, total=%d, downloaded=%d, extracted=%d, skipped=%d (%.03fs)",
+            target.value,
+            total,
             downloaded,
             extracted,
-            dupes,
+            duplicates,
             perf_counter() - start,
         )
 
-        return status_data
+        return total
 
 
 class CorpusRefreshContext:
@@ -621,7 +590,7 @@ class CorpusRefreshContext:
                 self.cloud_path,
                 self.queues_dir,
             )
-            corpus_size = queue_downloader.download_corpus()
+            corpus_size = queue_downloader.download_resource(ResourceType.CORPUS)
             self.refresh_stats.fields["corpus_pre"].update(corpus_size)
 
             LOG.info(
@@ -629,8 +598,8 @@ class CorpusRefreshContext:
                 self.cloud_path,
                 self.queues_dir,
             )
-            queue_stats = queue_downloader.download_queues()
-            self.refresh_stats.fields["queue_files"].update(sum(queue_stats.values()))
+            queue_size = queue_downloader.download_resource(ResourceType.QUEUE)
+            self.refresh_stats.fields["queue_files"].update(queue_size)
 
         except:  # noqa pylint: disable=bare-except
             try:

@@ -188,12 +188,6 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         metavar="DIR",
     )
     storage_group.add_argument(
-        "--corpus-download-size",
-        type=int,
-        help="When downloading the corpus, select only SIZE files randomly",
-        metavar="SIZE",
-    )
-    storage_group.add_argument(
         "--corpus-upload",
         type=Path,
         help="Use cloud storage to upload a test corpus for the specified project",

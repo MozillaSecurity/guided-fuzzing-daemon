@@ -24,6 +24,7 @@ from guided_fuzzing_daemon.storage import (
     CorpusSyncer,
     GCSFile,
     GoogleCloudStorage,
+    ResourceType,
     S3File,
     S3Storage,
 )
@@ -35,13 +36,15 @@ class _TestExc(Exception):
 
 class LocalTestStorageFile(CloudStorageFile):
     def __init__(self, name: PurePosixPath, root: Path) -> None:
-        super().__init__(name, None)
+        super().__init__(name, None, None)
         self._root = root
 
     def _refresh(self) -> None:
+        file_object = self._root / self.path
         self._modified = datetime.fromtimestamp(
-            (self._root / self.path).stat().st_mtime, timezone.utc
+            file_object.stat().st_mtime, timezone.utc
         )
+        self._size = file_object.stat().st_size
 
     def download_to_file(self, dest: Path) -> None:
         copyfile(self._root / self.path, dest)
@@ -62,10 +65,9 @@ class LocalTestStorageFile(CloudStorageFile):
 
 
 class LocalTestStorageProvider(CloudStorageProvider):
-    def __init__(self, root: Path, list_returns_folder: str | None = None) -> None:
+    def __init__(self, root: Path) -> None:
         super().__init__("")  # bucket_name -> don't care
         self.root = root
-        self.list_returns_folder = list_returns_folder
         root.mkdir(parents=True, exist_ok=True)
 
     def iter(self, prefix: PurePosixPath):
@@ -78,7 +80,7 @@ class LocalTestStorageProvider(CloudStorageProvider):
 
     def iter_local(self):
         for f in self.root.glob("**/*"):
-            if f.is_file() or str(f.relative_to(self.root)) == self.list_returns_folder:
+            if f.is_file():
                 yield f
 
     def iter_projects(self, prefix: str = ""):
@@ -103,13 +105,6 @@ def _patches(mocker, monkeypatch):
         return func(*args, **kwds)
 
     obj.submit.side_effect = _fake_submit
-
-    sample = mocker.patch("guided_fuzzing_daemon.storage.sample", autospec=True)
-
-    def _fake_sample(iterable, count):
-        return iterable[:count]
-
-    sample.side_effect = _fake_sample
 
     mocker.patch("guided_fuzzing_daemon.stats.CPU_POLL_INTERVAL", 0)
 
@@ -160,7 +155,9 @@ def mock_gcs(mocker):
 
 @pytest.fixture(name="gcsfile")
 def mock_gcs_file(gcs):
-    return GCSFile(name=PurePosixPath("test_file.txt"), modified=None, _provider=gcs)
+    return GCSFile(
+        name=PurePosixPath("test_file.txt"), modified=None, size=None, _provider=gcs
+    )
 
 
 @pytest.fixture(name="stubber")
@@ -173,7 +170,7 @@ def mock_stubber(s3storage):
 @pytest.fixture(name="s3file")
 def mock_s3file(s3storage):
     mock_name = PurePosixPath("test_file.txt")
-    return S3File(name=mock_name, modified=None, _provider=s3storage)
+    return S3File(name=mock_name, modified=None, size=None, _provider=s3storage)
 
 
 @pytest.fixture(name="s3storage")
@@ -358,8 +355,8 @@ def test_context_refresh(tmp_path):
         zf.writestr("a", b"")
     # create existing queues
     (storage.root / "t_proj" / "queues" / "queue1").mkdir(parents=True)
-    (storage.root / "t_proj" / "queues" / "queue1" / "b").touch()
-    (storage.root / "t_proj" / "queues" / "queue1" / "c").touch()
+    (storage.root / "t_proj" / "queues" / "queue1" / "b").write_text("b")
+    (storage.root / "t_proj" / "queues" / "queue1" / "c").write_text("c")
     with ZipFile(storage.root / "t_proj" / "queues" / "queue2.zip", "w") as zf:
         zf.writestr("d", b"")
 
@@ -375,8 +372,8 @@ def test_context_refresh(tmp_path):
     )
 
     with CorpusRefreshContext(opts, storage) as ctx:
-        (tests_dir / "e").touch()
-        (tests_dir / "f").touch()
+        (tests_dir / "e").write_text("e")
+        (tests_dir / "f").write_text("f")
 
     assert ctx.exit_code == 0
 
@@ -400,8 +397,8 @@ def test_context_refresh_suffix(tmp_path):
         zf.writestr("a", b"")
     # create existing queues
     (storage.root / "t_proj" / "queues" / "queue1").mkdir(parents=True)
-    (storage.root / "t_proj" / "queues" / "queue1" / "b.bin").touch()
-    (storage.root / "t_proj" / "queues" / "queue1" / "c.bin").touch()
+    (storage.root / "t_proj" / "queues" / "queue1" / "b.bin").write_text("b")
+    (storage.root / "t_proj" / "queues" / "queue1" / "c.bin").write_text("c")
     with ZipFile(storage.root / "t_proj" / "queues" / "queue2.zip", "w") as zf:
         zf.writestr("d.txt", b"")
 
@@ -417,9 +414,9 @@ def test_context_refresh_suffix(tmp_path):
     )
 
     with CorpusRefreshContext(opts, storage, suffix=".txt") as ctx:
-        (tests_dir / "e.txt").touch()
-        (tests_dir / "f.txt").touch()
-        (tests_dir / "g.bin").touch()
+        (tests_dir / "e.txt").write_text("e")
+        (tests_dir / "f.txt").write_text("f")
+        (tests_dir / "g.bin").write_text("g")
 
     assert ctx.exit_code == 0
 
@@ -564,7 +561,7 @@ def test_s3file_01(s3file, stubber):
     """test S3File.refresh()"""
     stubber.add_response(
         "head_object",
-        {"LastModified": datetime(2023, 8, 24)},
+        {"LastModified": datetime(2023, 8, 24), "ContentLength": 446284},
         {"Bucket": "test-bucket", "Key": "test_file.txt"},
     )
     assert s3file._modified is None  # pylint: disable=protected-access
@@ -701,11 +698,13 @@ def test_s3storage_01(s3storage, stubber):
             S3File(
                 name=PurePosixPath("test_file1.txt"),
                 modified=None,
+                size=None,
                 _provider=s3storage,
             ),
             S3File(
                 name=PurePosixPath("test_file2.txt"),
                 modified=None,
+                size=None,
                 _provider=s3storage,
             ),
         ]
@@ -718,7 +717,11 @@ def test_s3storage_02(s3storage, stubber):
         "list_objects_v2",
         {
             "Contents": [
-                {"Key": "prefix/test_file1.txt", "LastModified": datetime(2023, 8, 23)},
+                {
+                    "Size": 446284,
+                    "Key": "prefix/test_file1.txt",
+                    "LastModified": datetime(2023, 8, 23),
+                },
             ],
             "IsTruncated": True,
             "NextContinuationToken": "token123",
@@ -729,7 +732,11 @@ def test_s3storage_02(s3storage, stubber):
         "list_objects_v2",
         {
             "Contents": [
-                {"Key": "prefix/test_file2.txt", "LastModified": datetime(2023, 8, 24)},
+                {
+                    "Size": 446284,
+                    "Key": "prefix/test_file2.txt",
+                    "LastModified": datetime(2023, 8, 24),
+                },
             ],
             "IsTruncated": False,
         },
@@ -795,38 +802,18 @@ def test_syncer_download_corpus(tmp_path):
     (storage.root / "t_proj" / "corpus").mkdir(parents=True)
     # create corpus.zip
     with ZipFile(storage.root / "t_proj" / "corpus.zip", "w") as zf:
-        zf.writestr("file1", b"")
-        zf.writestr("file2", b"")
-    (storage.root / "t_proj" / "corpus" / "file3").touch()
+        zf.writestr("a", b"a")
+        zf.writestr("b", b"b")
+    (storage.root / "t_proj" / "corpus" / "c").write_text("c")
 
     out_path = tmp_path / "out"
     out_path.mkdir()
     corpus = Corpus(out_path)
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    assert syncer.download_corpus() == 3
-    assert (out_path / "file1").is_file()
-    assert (out_path / "file2").is_file()
-    assert (out_path / "file3").is_file()
-
-
-def test_syncer_download_corpus_subset(tmp_path):
-    """test download_corpus(random subset)"""
-    storage = LocalTestStorageProvider(tmp_path / "cloud")
-    (storage.root / "t_proj").mkdir()
-    # create corpus.zip
-    with ZipFile(storage.root / "t_proj" / "corpus.zip", "w") as zf:
-        zf.writestr("file1", b"")
-        zf.writestr("file2", b"")
-        zf.writestr("file3", b"")
-
-    out_path = tmp_path / "out"
-    corpus = Corpus(out_path)
-    syncer = CorpusSyncer(storage, corpus, "t_proj")
-    assert syncer.download_corpus(1) == 1
-
-    assert (out_path / "file1").is_file()
-    assert not (out_path / "file2").is_file()
-    assert not (out_path / "file2").is_file()
+    assert syncer.download_resource(ResourceType.CORPUS) == 3
+    assert (out_path / "a").is_file()
+    assert (out_path / "b").is_file()
+    assert (out_path / "c").is_file()
 
 
 def test_syncer_upload_corpus(tmp_path):
@@ -981,30 +968,28 @@ def test_syncer_delete_queues(tmp_path):
 
 def test_syncer_download_queues(tmp_path):
     """test download_queues()"""
-    storage = LocalTestStorageProvider(
-        tmp_path / "cloud", list_returns_folder="t_proj/queues"
-    )
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
     # pre-zip queue
     (storage.root / "t_proj" / "queues" / "queue1").mkdir(parents=True)
-    (storage.root / "t_proj" / "queues" / "queue1" / "a").touch()
+    (storage.root / "t_proj" / "queues" / "queue1" / "a").write_text("a")
     # new location of queue.zip
     with ZipFile(storage.root / "t_proj" / "queues" / "queue2.zip", "w") as zf:
-        zf.writestr("b", b"")
-        zf.writestr("c", b"")
+        zf.writestr("b", b"b")
+        zf.writestr("c", b"c")
     # old location of queue.zip
     (storage.root / "t_proj" / "queues" / "queue3").mkdir()
     with ZipFile(
         storage.root / "t_proj" / "queues" / "queue3" / "queue3.zip", "w"
     ) as zf:
-        zf.writestr("c", b"")
-        zf.writestr("d", b"")
+        zf.writestr("c", b"c")
+        zf.writestr("d", b"d")
     out_path = tmp_path / "out"
     out_path.mkdir()
     corpus = Corpus(out_path)
 
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    result = syncer.download_queues()
-    assert result == {"queue1": 1, "queue2": 2, "queue3": 2}
+    result = syncer.download_resource(ResourceType.QUEUE)
+    assert result == 5
 
     assert set(out_path.glob("**/*")) == {
         out_path / "a",
