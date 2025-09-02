@@ -9,6 +9,7 @@ from argparse import Namespace
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from itertools import chain
 from logging import getLogger
 from pathlib import Path, PurePosixPath
 from shutil import rmtree
@@ -492,9 +493,9 @@ class CorpusSyncer:
         assert self.project is not None
         start = perf_counter()
 
-        paths = [self.project / target.value]
+        paths = self.provider.iter(self.project / target.value)
         if target == ResourceType.CORPUS:
-            paths.append(self.project / "corpus.zip")
+            paths = chain(paths, [self.provider[self.project / "corpus.zip"]])
 
         total = 0
         downloaded = 0
@@ -503,21 +504,22 @@ class CorpusSyncer:
         zips = []
         with TempPath() as tmpd:
             with Executor() as executor:
-                for path in paths:
-                    for file in self.provider.iter(path):
-                        if not file.size > 0:
-                            LOG.warning("skipping invalid path: %s", file.path)
-                            continue
-                        if file.path.suffix == ".zip":
-                            out_path = tmpd / file.path.name
-                            zips.append(out_path)
-                        else:
-                            # download directly to corpus path
-                            out_path = self.corpus.path / file.path.name
-                            total += 1
+                for file in paths:
+                    if not file.exists():
+                        continue
+                    if not file.size > 0:
+                        LOG.warning("skipping invalid path: %s", file.path)
+                        continue
+                    if file.path.suffix == ".zip":
+                        out_path = tmpd / file.path.name
+                        zips.append(out_path)
+                    else:
+                        # download directly to corpus path
+                        out_path = self.corpus.path / file.path.name
+                        total += 1
 
-                        executor.submit(file.download_to_file, out_path)
-                        downloaded += 1
+                    executor.submit(file.download_to_file, out_path)
+                    downloaded += 1
 
             extracted = 0
             for zip_file in zips:
