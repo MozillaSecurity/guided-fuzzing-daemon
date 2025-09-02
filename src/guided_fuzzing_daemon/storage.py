@@ -304,7 +304,6 @@ class GCSFile(CloudStorageFile):
 
     def _refresh(self) -> None:
         blob = self._provider.bucket.blob(str(self.path))
-        blob.reload()
         self._modified = blob.updated
         self._size = blob.size
         self._have_meta = True
