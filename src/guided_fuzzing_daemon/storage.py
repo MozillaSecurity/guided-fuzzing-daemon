@@ -56,8 +56,8 @@ class CloudStorageFile(ABC):
     ):
         self.path = name
         self._modified = modified
-        self._size = size if size is not None else 0
-        self._have_meta = modified is not None
+        self._size = size
+        self._have_meta = modified is not None and size is not None
 
     @abstractmethod
     def _refresh(self) -> None:
@@ -306,7 +306,7 @@ class GCSFile(CloudStorageFile):
         blob = self._provider.bucket.blob(str(self.path))
         blob.reload()
         self._modified = blob.updated
-        self._size = blob.size if blob.size is not None else 0
+        self._size = blob.size
         self._have_meta = True
 
     def download_to_file(self, dest: Path) -> None:
