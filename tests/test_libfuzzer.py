@@ -7,6 +7,7 @@ from itertools import chain, count, repeat
 from os import chdir
 from pathlib import Path, PurePosixPath
 from queue import Empty
+from types import SimpleNamespace
 
 import pytest
 
@@ -437,12 +438,15 @@ def test_libfuzzer_stats_01(mocker):
 def test_libfuzzer_refresh_01(libf, mocker, tmp_path):
     """libFuzzer corpus refresh"""
     # setup
+    corpus_path = tmp_path / "refresh"
+    queues_path = corpus_path / "queues"
     stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
-    libf.args.corpus_refresh = tmp_path / "refresh"
+    syncer.return_value.corpus = SimpleNamespace(path=corpus_path)
+    libf.args.corpus_refresh = corpus_path
 
     def fake_run(*args, **kwds):
-        (tmp_path / "refresh" / "tests" / "min.bin").touch()
+        (corpus_path / "tests" / "min.bin").touch()
         assert "-merge=1" in args[0]
         assert "env" in kwds
         assert "LD_LIBRARY_PATH" in kwds["env"]
@@ -462,8 +466,8 @@ def test_libfuzzer_refresh_01(libf, mocker, tmp_path):
     # check
     assert result == 0
     assert syncer.return_value.method_calls == [
-        mocker.call.download_resource(ResourceType.CORPUS),
-        mocker.call.download_resource(ResourceType.QUEUE),
+        mocker.call.download_resource(ResourceType.CORPUS, queues_path),
+        mocker.call.download_resource(ResourceType.QUEUE, queues_path),
         mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]
