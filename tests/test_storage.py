@@ -382,9 +382,11 @@ def test_context_refresh(tmp_path):
     assert stats["corpus_post"] == "2"
     assert stats["corpus_pre"] == "1"
 
-    assert set(storage.iter_local()) == {storage.root / "t_proj" / "corpus.zip"}
+    assert set(storage.iter_local()) == {
+        storage.root / "t_proj" / "corpus" / "corpus.zip"
+    }
 
-    with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
+    with ZipFile(storage.root / "t_proj" / "corpus" / "corpus.zip") as zf:
         assert set(zf.namelist()) == {"e", "f"}
 
 
@@ -425,10 +427,51 @@ def test_context_refresh_suffix(tmp_path):
     assert stats["corpus_post"] == "2"
     assert stats["corpus_pre"] == "1"
 
-    assert set(storage.iter_local()) == {storage.root / "t_proj" / "corpus.zip"}
+    assert set(storage.iter_local()) == {
+        storage.root / "t_proj" / "corpus" / "corpus.zip"
+    }
 
-    with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
+    with ZipFile(storage.root / "t_proj" / "corpus" / "corpus.zip") as zf:
         assert set(zf.namelist()) == {"e.txt", "f.txt"}
+
+
+def test_context_keyboard_interrupt(mocker, tmp_path):
+    """test CorpusRefreshContext.__exit__ with KeyboardInterrupt"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+
+    refresh_dir = tmp_path / "refresh"
+    opts = Namespace(
+        bucket="t_bucket",
+        corpus_refresh=refresh_dir,
+        project="t_proj",
+        provider="s3",
+        stats=tmp_path / "stats",
+    )
+
+    # Mock CorpusSyncer methods
+    mock_upload_queue = mocker.patch(
+        "guided_fuzzing_daemon.storage.CorpusSyncer.upload_queue"
+    )
+    mock_delete_queues = mocker.patch(
+        "guided_fuzzing_daemon.storage.CorpusSyncer.delete_queues"
+    )
+    mock_upload_corpus = mocker.patch(
+        "guided_fuzzing_daemon.storage.CorpusSyncer.upload_corpus"
+    )
+
+    # Test KeyboardInterrupt handling
+    with pytest.raises(KeyboardInterrupt):
+        with CorpusRefreshContext(opts, storage) as merger:
+            # Create some files in updated_tests_dir so upload methods get called
+            merger.updated_tests_dir.mkdir(parents=True, exist_ok=True)
+            (merger.updated_tests_dir / "test_file.bin").write_text("test")
+            raise KeyboardInterrupt()
+
+    # Verify queue methods were called
+    mock_upload_queue.assert_called_once()
+    mock_delete_queues.assert_called_once()
+    mock_upload_corpus.assert_called_once()
 
 
 def test_gcsfile_01(gcsfile):
@@ -833,9 +876,11 @@ def test_syncer_upload_corpus(tmp_path):
     syncer = CorpusSyncer(storage, corpus, "t_proj")
     syncer.upload_corpus()
 
-    assert set(storage.iter_local()) == {storage.root / "t_proj" / "corpus.zip"}
+    assert set(storage.iter_local()) == {
+        storage.root / "t_proj" / "corpus" / "corpus.zip"
+    }
     out_path = tmp_path / "out"
-    with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
+    with ZipFile(storage.root / "t_proj" / "corpus" / "corpus.zip") as zf:
         assert set(zf.namelist()) == {"c", "d"}
         zf.extractall(out_path)
     assert (out_path / "c").read_text() == "c"
@@ -882,9 +927,11 @@ def test_syncer_upload_corpus_suffix(tmp_path):
     syncer = CorpusSyncer(storage, corpus, "t_proj", ".bin")
     syncer.upload_corpus()
 
-    assert set(storage.iter_local()) == {storage.root / "t_proj" / "corpus.zip"}
+    assert set(storage.iter_local()) == {
+        storage.root / "t_proj" / "corpus" / "corpus.zip"
+    }
     out_path = tmp_path / "out"
-    with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
+    with ZipFile(storage.root / "t_proj" / "corpus" / "corpus.zip") as zf:
         assert set(zf.namelist()) == {"d.bin"}
         zf.extractall(out_path)
     assert (out_path / "d.bin").read_text() == "d"

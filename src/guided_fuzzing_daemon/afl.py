@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 from argparse import Namespace
 from logging import getLogger
 from pathlib import Path
@@ -136,6 +137,11 @@ def afl_main(
     binary = Path(opts.rargs[0]).resolve()
     assert binary.is_file()
 
+    base_env = os.environ.copy()
+    library_path = [str(binary.parent / "gtest"), str(binary.parent)]
+    library_path.extend(base_env.get("LD_LIBRARY_PATH", "").split(":"))
+    base_env["LD_LIBRARY_PATH"] = ":".join(library_path)
+
     timeout = opts.timeout or 1000
 
     if opts.corpus_refresh:
@@ -146,53 +152,103 @@ def afl_main(
             return 2
 
         with (
-            CorpusRefreshContext(opts, storage) as merger,
+            CorpusRefreshContext(opts, storage, separate_corpus=True) as merger,
             TempPath() as tmp_base,
             LogTee(opts.afl_hide_logs, opts.instances) as log_tee,
         ):
-            env = os.environ.copy()
-            library_path = [str(binary.parent / "gtest"), str(binary.parent)]
-            library_path.extend(env.get("LD_LIBRARY_PATH", "").split(":"))
-            env["LD_LIBRARY_PATH"] = ":".join(library_path)
-
             log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, 0))
-
-            afl_cmdline = [
+            base_args = [
                 str(afl_cmin),
                 "-e",
-                "-i",
-                str(merger.queues_dir),
                 "-o",
                 str(merger.updated_tests_dir),
                 "-t",
                 str(timeout),
                 "-m",
                 "none",
-                "-T",
-                str(opts.instances),
-                "--",
-                str(binary),
-                *opts.rargs[1:],
             ]
 
+            if opts.instances > 1:
+                base_args.extend(["-T", str(opts.instances)])
+
             LOG.info("Running afl-cmin")
-            # pylint: disable=consider-using-with
-            proc: Popen[str] | None = Popen(
-                afl_cmdline,
-                stderr=STDOUT,
-                stdout=log_tee.open_files[0].handle,
-                text=True,
-                env=env,
-            )
+
             last_stats_report = 0.0
-            assert proc is not None
-            while proc.poll() is None:
-                # Calculate stats
-                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
-                    merger.refresh_stats.write_file(opts.stats, [])
-                    last_stats_report = time()
-                sleep(0.1)
-            assert not proc.wait()
+            collect_proc = None
+
+            i = 0
+            input_dirs = [merger.corpus_dir, merger.queues_dir]
+            try:
+                for i, input_dir in enumerate(input_dirs):
+                    if not any(f.is_file() for f in input_dir.iterdir()):
+                        continue
+                    # pylint: disable=consider-using-with
+                    collect_proc = Popen(
+                        [
+                            *base_args,
+                            "-i",
+                            str(input_dir),
+                            "-c",
+                            "--",
+                            str(binary),
+                            *opts.rargs[1:],
+                        ],
+                        stderr=STDOUT,
+                        stdout=log_tee.open_files[0].handle,
+                        text=True,
+                        env=base_env,
+                        start_new_session=True,
+                    )
+
+                    assert collect_proc is not None
+                    while collect_proc.poll() is None:
+                        if (
+                            opts.stats
+                            and last_stats_report < time() - STATS_UPLOAD_PERIOD
+                        ):
+                            merger.refresh_stats.write_file(opts.stats, [])
+                            last_stats_report = time()
+                        sleep(0.1)
+                    assert not collect_proc.wait()
+
+            except KeyboardInterrupt:
+                if i == 0:
+                    LOG.warning("Interrupt detected during initial corpus processing")
+                    raise
+
+                LOG.warning("Interrupt detected - processing the results we have")
+                if collect_proc is not None:
+                    try:
+                        collect_proc.wait(timeout=2)
+                    except TimeoutExpired:
+                        os.killpg(os.getpgid(collect_proc.pid), signal.SIGKILL)
+                        collect_proc.wait(timeout=5)
+                raise
+            finally:
+                if i > 0:
+                    trace_path = merger.updated_tests_dir / ".traces"
+                    if not any(f.is_file() for f in trace_path.iterdir()):
+                        LOG.error("No results found in the test directory!")
+                    else:
+                        # pylint: disable=consider-using-with
+                        process_proc = Popen(
+                            [
+                                *base_args,
+                                "-i",
+                                str(merger.corpus_dir),
+                                "-i",
+                                str(merger.queues_dir),
+                                "-p",
+                                "--",
+                                str(binary),
+                                *opts.rargs[1:],
+                            ],
+                            stderr=STDOUT,
+                            stdout=log_tee.open_files[0].handle,
+                            text=True,
+                            env=base_env,
+                        )
+                        assert not process_proc.wait()
 
         assert merger.exit_code is not None
         return merger.exit_code
@@ -225,7 +281,6 @@ def afl_main(
             base_cfg.addMetadata(metadata)
 
     # environment settings that apply to all instances
-    base_env = os.environ.copy()
     base_env["AFL_NO_CRASH_README"] = "1"
     base_env["AFL_NO_UI"] = "1"
     base_env["LD_LIBRARY_PATH"] = f"{binary.parent / 'gtest'}:{binary.parent}"
@@ -265,17 +320,17 @@ def afl_main(
 
         while opts.max_runtime > time() - start:
             # check and restart subprocesses
-            for idx, proc in enumerate(procs):
-                if proc and proc.poll() is not None:
-                    LOG.warning("afl-fuzz returned early: %d", proc.wait())
-                    procs[idx] = proc = None
+            for idx, collect_proc in enumerate(procs):
+                if collect_proc and collect_proc.poll() is not None:
+                    LOG.warning("afl-fuzz returned early: %d", collect_proc.wait())
+                    procs[idx] = collect_proc = None
                     stats.fields["instances"] -= 1  # type: ignore
                     if run_with_debug and debug_runs:
                         # we ran once with AFL_DEBUG=1, time to stop
                         return 1
 
                 if (
-                    proc is None
+                    collect_proc is None
                     # rate limit AFL++ instance launch to 1/minute
                     and last_afl_start < time() - 60
                     # don't launch secondary instances until main instance has finished
@@ -446,23 +501,25 @@ def afl_main(
         # but do in parallel in case there are many procs,
         # we only need to wait 10s total not for each.
         start_term = time()
-        for proc in procs:
-            if proc:
-                proc.terminate()
+        for collect_proc in procs:
+            if collect_proc:
+                collect_proc.terminate()
         while any(procs) and start_term > time() - 10:
             sleep(0.1)
-            for idx, proc in enumerate(procs):
-                if proc and proc.poll() is not None:
+            for idx, collect_proc in enumerate(procs):
+                if collect_proc and collect_proc.poll() is not None:
                     procs[idx] = None
         if any(procs):
             LOG.info("need to kill %d", sum(1 for proc in procs if proc))
-        for proc in procs:
-            if proc:
-                proc.kill()
+        for collect_proc in procs:
+            if collect_proc:
+                collect_proc.kill()
                 try:
-                    proc.wait(timeout=1)
+                    collect_proc.wait(timeout=1)
                 except TimeoutExpired:
-                    LOG.warning("Process %d did not exit after SIGKILL", proc.pid)
+                    LOG.warning(
+                        "Process %d did not exit after SIGKILL", collect_proc.pid
+                    )
 
         log_tee.close()
 

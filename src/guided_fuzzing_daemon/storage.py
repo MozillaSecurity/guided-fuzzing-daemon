@@ -404,21 +404,29 @@ class CorpusSyncer:
         uploaded = 0
 
         # get list of files to delete if upload is successful
-        to_delete = {
-            file.path.name: file for file in self.provider.iter(self.project / "corpus")
-        }
-        # remove corpus.zip, it will be overwritten on success
-        to_delete.pop("corpus.zip", None)
+        to_delete = [
+            file
+            for file in self.provider.iter(self.project / "corpus")
+            # exclude corpus.zip, it will be overwritten on success
+            if file.path.name != "corpus.zip"
+        ]
+
+        # remove deprecated corpus.zip at project root
+        to_delete.append(self.provider[self.project / "corpus.zip"])
 
         with TempPath() as tmpd:
-            corpus_zip_remote = self.provider[self.project / "corpus.zip"]
+            corpus_zip_remote = self.provider[self.project / "corpus" / "corpus.zip"]
             corpus_zip_local = tmpd / "corpus.zip"
 
             with ZipFile(corpus_zip_local, "w", ZIP_DEFLATED) as zfp:
                 for testcase in self.corpus.path.iterdir():
-                    if self.suffix is None or testcase.suffix == self.suffix:
-                        zfp.write(testcase, arcname=testcase.name)
-                        uploaded += 1
+                    if testcase.name.startswith("."):
+                        continue
+                    if self.suffix is not None and testcase.suffix != self.suffix:
+                        continue
+
+                    zfp.write(testcase, arcname=testcase.name)
+                    uploaded += 1
 
             if uploaded:
                 corpus_zip_remote.upload_from_file(corpus_zip_local)
@@ -427,7 +435,7 @@ class CorpusSyncer:
                 LOG.warning("Corpus is empty! Not deleting existing corpus")
                 to_delete.clear()
 
-        self.provider.delete(to_delete.values())
+        self.provider.delete(to_delete)
 
         LOG.info(
             "upload_corpus() -> uploaded=%d (%.03fs)",
@@ -455,6 +463,8 @@ class CorpusSyncer:
                     if not queue.path.is_dir():
                         continue
                     for testcase in queue.path.iterdir():
+                        if testcase.name.startswith("."):
+                            continue
                         if testcase.is_dir():
                             LOG.error("-> directory detected in corpus: %s", testcase)
                             errors += 1
@@ -477,26 +487,36 @@ class CorpusSyncer:
             perf_counter() - start,
         )
 
-    def delete_queues(self) -> None:
+    def delete_queues(self, skip_names: Iterable[str] | None = None) -> None:
         assert self.project is not None
         start = perf_counter()
         # get list of queue files to delete
         prefix = self.project / "queues"
-        existing = tuple(self.provider.iter(prefix))
-        self.provider.delete(existing)
+        to_delete = tuple(
+            file
+            for file in self.provider.iter(prefix)
+            if skip_names is None or file.path.name not in skip_names
+        )
+        self.provider.delete(to_delete)
         LOG.info(
             "delete_queues() -> deleted=%d (%.03fs)",
-            len(existing),
+            len(to_delete),
             perf_counter() - start,
         )
 
-    def download_resource(self, target: ResourceType) -> int:
+    def download_resource(self, target: ResourceType, dest: Path | None = None) -> int:
         assert self.project is not None
         start = perf_counter()
 
+        if dest is None:
+            dest = self.corpus.path
+
         paths = self.provider.iter(self.project / target.value)
         if target == ResourceType.CORPUS:
-            paths = chain(paths, [self.provider[self.project / "corpus.zip"]])
+            paths = chain(
+                paths,
+                [self.provider[self.project / "corpus.zip"]],
+            )
 
         total = 0
         downloaded = 0
@@ -512,11 +532,14 @@ class CorpusSyncer:
                         LOG.warning("skipping invalid path: %s", file.path)
                         continue
                     if file.path.suffix == ".zip":
-                        out_path = tmpd / file.path.name
+                        # Avoids a collision with legacy project/corpus.zip and
+                        # project/corpus/corpus.zip
+                        unique_name = f"{file.path.stem}_{uuid4().hex[:8]}.zip"
+                        out_path = tmpd / unique_name
                         zips.append(out_path)
                     else:
                         # download directly to corpus path
-                        out_path = self.corpus.path / file.path.name
+                        out_path = dest / file.path.name
                         total += 1
 
                     executor.submit(file.download_to_file, out_path)
@@ -527,10 +550,10 @@ class CorpusSyncer:
                 with ZipFile(zip_file) as zf:
                     for entry in zf.infolist():
                         total += 1
-                        if (self.corpus.path / entry.filename).exists():
+                        if (dest / entry.filename).exists():
                             duplicates += 1
                         else:
-                            zf.extract(entry.filename, self.corpus.path)
+                            zf.extract(entry.filename, dest)
                             extracted += 1
                 zip_file.unlink()
 
@@ -556,6 +579,7 @@ class CorpusRefreshContext:
         subdir: str | None = None,
         suffix: str | None = None,
         extra_files: Iterable[Path] = (),
+        separate_corpus: bool = False,
     ) -> None:
         self.project = opts.project
         self.cloud_path = f"{opts.provider.lower()}://{opts.bucket}/{opts.project}"
@@ -574,15 +598,21 @@ class CorpusRefreshContext:
         self.queues_dir = opts.corpus_refresh / "queues"
         self.queues_dir.mkdir(parents=True, exist_ok=True)
 
+        self.corpus_dir = self.queues_dir
+        if separate_corpus:
+            self.corpus_dir = opts.corpus_refresh / "corpus"
+            self.corpus_dir.mkdir()
+
         # Ensure the directory for our new tests is empty
         self.updated_tests_dir = opts.corpus_refresh / "tests"
         if self.updated_tests_dir.exists():
-            rmtree(self.updated_tests_dir)
+            rmtree(self.updated_tests_dir, ignore_errors=True)
         self.updated_tests_dir.mkdir()
+
         self.output_subdir = subdir
 
         try:
-            queue_downloader = CorpusSyncer(
+            syncer = CorpusSyncer(
                 self.storage, Corpus(self.queues_dir), self.project, self.suffix
             )
 
@@ -592,7 +622,7 @@ class CorpusRefreshContext:
                 self.cloud_path,
                 self.queues_dir,
             )
-            corpus_size = queue_downloader.download_resource(ResourceType.CORPUS)
+            corpus_size = syncer.download_resource(ResourceType.CORPUS, self.corpus_dir)
             self.refresh_stats.fields["corpus_pre"].update(corpus_size)
 
             LOG.info(
@@ -600,7 +630,7 @@ class CorpusRefreshContext:
                 self.cloud_path,
                 self.queues_dir,
             )
-            queue_size = queue_downloader.download_resource(ResourceType.QUEUE)
+            queue_size = syncer.download_resource(ResourceType.QUEUE, self.queues_dir)
             self.refresh_stats.fields["queue_files"].update(queue_size)
 
         except:  # noqa pylint: disable=bare-except
@@ -614,42 +644,64 @@ class CorpusRefreshContext:
         return self
 
     def __exit__(self, exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
-        if exc_type is not None:
+        def update_post_stats(src: Path) -> bool:
+            corpus_post = src.iterdir()
+            if self.suffix is not None:
+                corpus_post = (f for f in corpus_post if f.suffix == self.suffix)
+            self.refresh_stats.fields["corpus_post"].update(sum(1 for _ in corpus_post))
+
             if self.stats:
                 self.refresh_stats.write_file(self.stats, [])
-            raise
+
+            if not self.refresh_stats.fields["corpus_post"].value:
+                LOG.error("error: Merge returned empty result, refusing to upload.")
+                return False
+            return True
+
+        def upload_corpus() -> None:
+            LOG.info("Uploading reduced corpus to %s/corpus/", self.cloud_path)
+            corpus_syncer.upload_corpus()
+            for extra in self.extra_files:
+                path = PurePosixPath(self.project) / "corpus" / extra.name
+                remote_obj = self.storage[path]
+                remote_obj.upload_from_file(extra)
 
         updated_tests_dir = self.updated_tests_dir
         if self.output_subdir is not None:
             updated_tests_dir = updated_tests_dir / self.output_subdir
 
-        self.refresh_stats.fields["corpus_post"].update(
-            sum(
-                1
-                for f in updated_tests_dir.iterdir()
-                if self.suffix is None or f.suffix == self.suffix
-            )
+        corpus_syncer = CorpusSyncer(
+            self.storage, Corpus(updated_tests_dir), self.project, self.suffix
         )
 
-        if self.stats:
-            self.refresh_stats.write_file(self.stats, [])
+        if exc_type is not None:
+            if self.stats:
+                self.refresh_stats.write_file(self.stats, [])
+            # Catch SIGINT (via timeout -s 2 or ctrl+c)
+            if exc_type is KeyboardInterrupt:
+                if not update_post_stats(updated_tests_dir):
+                    self.exit_code = 2
+                    return
+                upload_corpus()
 
-        if not self.refresh_stats.fields["corpus_post"].value:
-            LOG.error("error: Merge returned empty result, refusing to upload.")
+                LOG.info("Pruning queues and uploading to %s/queues/", self.cloud_path)
+                queue_syncer = CorpusSyncer(
+                    self.storage, Corpus(self.queues_dir), self.project, self.suffix
+                )
+                queue_syncer.upload_queue(
+                    skip_names=[
+                        f.name for f in updated_tests_dir.iterdir() if f.is_file()
+                    ]
+                )
+                queue_syncer.delete_queues()
+            raise
+
+        if not update_post_stats(updated_tests_dir):
             self.exit_code = 2
             return
 
         # replace existing corpus with reduced corpus
-        LOG.info("Uploading reduced corpus to %s/corpus/", self.cloud_path)
-        corpus_uploader = CorpusSyncer(
-            self.storage, Corpus(updated_tests_dir), self.project, self.suffix
-        )
-        corpus_uploader.upload_corpus()
-        for extra in self.extra_files:
-            remote_obj = self.storage[
-                PurePosixPath(self.project) / "corpus" / extra.name
-            ]
-            remote_obj.upload_from_file(extra)
-        corpus_uploader.delete_queues()
+        upload_corpus()
+        corpus_syncer.delete_queues()
 
         self.exit_code = 0
