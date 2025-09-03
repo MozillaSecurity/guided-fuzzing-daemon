@@ -168,31 +168,43 @@ def afl_main(
                 str(timeout),
                 "-m",
                 "none",
-                "-T",
-                str(opts.instances),
-                "--",
-                str(binary),
-                *opts.rargs[1:],
             ]
 
-            LOG.info("Running afl-cmin")
-            # pylint: disable=consider-using-with
-            proc: Popen[str] | None = Popen(
-                afl_cmdline,
-                stderr=STDOUT,
-                stdout=log_tee.open_files[0].handle,
-                text=True,
-                env=env,
-            )
-            last_stats_report = 0.0
-            assert proc is not None
-            while proc.poll() is None:
-                # Calculate stats
-                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
-                    merger.refresh_stats.write_file(opts.stats, [])
-                    last_stats_report = time()
-                sleep(0.1)
-            assert not proc.wait()
+            if opts.corpus_refresh_resume:
+                env["AFL_KEEP_TRACES"] = "1"
+                afl_cmdline.append("-r")
+
+            if opts.instances > 1:
+                afl_cmdline.extend(
+                    [
+                        "-T",
+                        str(opts.instances),
+                    ]
+                )
+
+            try:
+                LOG.info("Running afl-cmin")
+                # pylint: disable=consider-using-with
+                proc: Popen[str] | None = Popen(
+                    [*afl_cmdline, str(binary)],
+                    stderr=STDOUT,
+                    stdout=log_tee.open_files[0].handle,
+                    text=True,
+                    env=env,
+                )
+                last_stats_report = 0.0
+                assert proc is not None
+                while proc.poll() is None:
+                    # Calculate stats
+                    if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
+                        merger.refresh_stats.write_file(opts.stats, [])
+                        last_stats_report = time()
+                    sleep(0.1)
+                assert not proc.wait()
+            except KeyboardInterrupt:
+                if proc is not None:
+                    proc.wait(10)
+                raise
 
         assert merger.exit_code is not None
         return merger.exit_code

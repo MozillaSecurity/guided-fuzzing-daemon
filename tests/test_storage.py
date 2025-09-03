@@ -185,6 +185,7 @@ def _read_stats(path):
     )
     assert stats.keys() == {
         "queue_files",
+        "trace_files",
         "corpus_post",
         "corpus_pre",
         "cpu/load",
@@ -262,6 +263,7 @@ def test_context_raise(tmp_path):
     tests_dir = refresh_dir / "tests"
     tests_dir.mkdir()
     (tests_dir / "test").touch()
+    traces_dir = tests_dir / ".traces"
 
     opts = Namespace(
         bucket="t_bucket",
@@ -276,9 +278,10 @@ def test_context_raise(tmp_path):
             raise _TestExc()
 
     assert set(queues_dir.iterdir()) == set()
-    assert set(tests_dir.iterdir()) == set()
+    assert set(tests_dir.iterdir()) == {traces_dir}
     stats = _read_stats(tmp_path / "stats")
     assert stats["queue_files"] == "0"
+    assert stats["trace_files"] == "0"
     assert stats["corpus_post"] == "0"
     assert stats["corpus_pre"] == "0"
 
@@ -288,6 +291,7 @@ def test_context_raise_during(mocker, tmp_path):
     refresh_dir = tmp_path / "refresh"
     queues_dir = refresh_dir / "queues"
     tests_dir = refresh_dir / "tests"
+    traces_dir = tests_dir / ".traces"
 
     opts = Namespace(
         bucket="t_bucket",
@@ -304,9 +308,10 @@ def test_context_raise_during(mocker, tmp_path):
             raise _TestExc()
 
     assert set(queues_dir.iterdir()) == set()
-    assert set(tests_dir.iterdir()) == set()
+    assert set(tests_dir.iterdir()) == {traces_dir}
     stats = _read_stats(tmp_path / "stats")
     assert stats["queue_files"] == "0"
+    assert stats["trace_files"] == "0"
     assert stats["corpus_post"] == "0"
     assert stats["corpus_pre"] == "0"
 
@@ -324,6 +329,7 @@ def test_context_no_refresh(tmp_path):
     refresh_dir = tmp_path / "refresh"
     queues_dir = refresh_dir / "queues"
     tests_dir = refresh_dir / "tests"
+    traces_dir = tests_dir / ".traces"
 
     opts = Namespace(
         bucket="t_bucket",
@@ -339,9 +345,10 @@ def test_context_no_refresh(tmp_path):
     assert ctx.exit_code == 2
 
     assert set(queues_dir.iterdir()) == set()
-    assert set(tests_dir.iterdir()) == set()
+    assert set(tests_dir.iterdir()) == {traces_dir}
     stats = _read_stats(tmp_path / "stats")
     assert stats["queue_files"] == "0"
+    assert stats["trace_files"] == "0"
     assert stats["corpus_post"] == "0"
     assert stats["corpus_pre"] == "0"
 
@@ -379,13 +386,14 @@ def test_context_refresh(tmp_path):
 
     stats = _read_stats(tmp_path / "stats")
     assert stats["queue_files"] == "3"
+    assert stats["trace_files"] == "0"
     assert stats["corpus_post"] == "2"
     assert stats["corpus_pre"] == "1"
 
     assert set(storage.iter_local()) == {storage.root / "t_proj" / "corpus.zip"}
 
     with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
-        assert set(zf.namelist()) == {"e", "f"}
+        assert set(zf.namelist()) == {"e", "f", ".traces/"}
 
 
 def test_context_refresh_suffix(tmp_path):
@@ -429,6 +437,41 @@ def test_context_refresh_suffix(tmp_path):
 
     with ZipFile(storage.root / "t_proj" / "corpus.zip") as zf:
         assert set(zf.namelist()) == {"e.txt", "f.txt"}
+
+
+def test_context_keyboard_interrupt(mocker, tmp_path):
+    """test CorpusRefreshContext.__exit__ with KeyboardInterrupt"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+
+    refresh_dir = tmp_path / "refresh"
+    opts = Namespace(
+        bucket="t_bucket",
+        corpus_refresh=refresh_dir,
+        project="t_proj",
+        provider="s3",
+        stats=tmp_path / "stats",
+    )
+
+    # Mock the logger and CorpusSyncer.upload_traces method
+    mock_log = mocker.patch("guided_fuzzing_daemon.storage.LOG")
+    mock_upload_traces = mocker.patch(
+        "guided_fuzzing_daemon.storage.CorpusSyncer.upload_traces"
+    )
+
+    # Test KeyboardInterrupt handling
+    with pytest.raises(KeyboardInterrupt):
+        with CorpusRefreshContext(opts, storage):
+            raise KeyboardInterrupt()
+
+    # Verify the expected log message was called
+    mock_log.info.assert_called_with(
+        "Corpus refresh interrupted - uploading traces to %s/traces.zip",
+        "s3://t_bucket/t_proj",
+    )
+
+    # Verify upload_traces was called
+    mock_upload_traces.assert_called_once()
 
 
 def test_gcsfile_01(gcsfile):
@@ -810,7 +853,7 @@ def test_syncer_download_corpus(tmp_path):
     out_path.mkdir()
     corpus = Corpus(out_path)
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    assert syncer.download_resource(ResourceType.CORPUS) == 3
+    assert syncer.download_resource(ResourceType.CORPUS, out_path) == 3
     assert (out_path / "a").is_file()
     assert (out_path / "b").is_file()
     assert (out_path / "c").is_file()
@@ -988,7 +1031,7 @@ def test_syncer_download_queues(tmp_path):
     corpus = Corpus(out_path)
 
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    result = syncer.download_resource(ResourceType.QUEUE)
+    result = syncer.download_resource(ResourceType.QUEUE, out_path)
     assert result == 5
 
     assert set(out_path.glob("**/*")) == {
@@ -1048,3 +1091,91 @@ def test_syncer_upload_queue_extras(skip_names, tmp_path):
     assert set(out_path.glob("**/*")) == expected_paths
     for p in expected_paths:
         assert p.read_text() == p.name
+
+
+def test_syncer_upload_traces(tmp_path):
+    """test upload_traces() with comprehensive trace directory structure"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+
+    in_path = tmp_path / "in"
+    in_path.mkdir()
+    traces_path = in_path / ".traces"
+    traces_path.mkdir()
+
+    # Create files that match suffix (.txt)
+    (traces_path / "trace1.txt").write_text("trace1")
+    (traces_path / "trace2.txt").write_text("trace2")
+
+    # Create files that don't match suffix (should be skipped)
+    (traces_path / "trace3.bin").write_text("trace3")
+    (traces_path / "trace4.log").write_text("trace4")
+
+    # Create hidden files (should be skipped regardless of suffix)
+    (traces_path / ".hidden.txt").write_text("hidden1")
+    (traces_path / ".dotfile").write_text("hidden2")
+
+    corpus = Corpus(in_path)
+    syncer = CorpusSyncer(storage, corpus, "t_proj", ".txt")
+    syncer.upload_traces()
+
+    # Verify ZIP file was created
+    assert (storage.root / "t_proj" / "traces.zip").is_file()
+
+    # Extract and verify contents - only .txt files that don't start with dot
+    out_path = tmp_path / "out"
+    with ZipFile(storage.root / "t_proj" / "traces.zip") as zf:
+        assert set(zf.namelist()) == {"trace1.txt", "trace2.txt"}
+        zf.extractall(out_path)
+    assert (out_path / "trace1.txt").read_text() == "trace1"
+    assert (out_path / "trace2.txt").read_text() == "trace2"
+
+
+def test_syncer_upload_traces_empty(tmp_path, mocker):
+    """test upload_traces() with empty traces directory"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+    # create existing traces.zip to ensure it's not deleted
+    with ZipFile(storage.root / "t_proj" / "traces.zip", "w") as zf:
+        zf.writestr("old_trace", b"old")
+
+    in_path = tmp_path / "in"
+    in_path.mkdir()
+    traces_path = in_path / ".traces"
+    traces_path.mkdir()
+    # no files in traces directory
+
+    corpus = Corpus(in_path)
+    syncer = CorpusSyncer(storage, corpus, "t_proj")
+
+    # Mock logger to capture warning
+    mock_log = mocker.patch("guided_fuzzing_daemon.storage.LOG")
+
+    syncer.upload_traces()
+
+    # Verify existing ZIP file was not deleted
+    assert (storage.root / "t_proj" / "traces.zip").is_file()
+    with ZipFile(storage.root / "t_proj" / "traces.zip") as zf:
+        assert set(zf.namelist()) == {"old_trace"}
+
+    # Verify warning was logged
+    mock_log.warning.assert_called_once_with(
+        "Traces directory is empty! Not deleting existing archive"
+    )
+
+
+def test_syncer_upload_traces_missing_directory(tmp_path):
+    """test upload_traces() with missing .traces directory"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+
+    in_path = tmp_path / "in"
+    in_path.mkdir()
+    # no .traces directory created
+
+    corpus = Corpus(in_path)
+    syncer = CorpusSyncer(storage, corpus, "t_proj")
+
+    # Should handle missing directory gracefully
+    with pytest.raises(FileNotFoundError):
+        syncer.upload_traces()

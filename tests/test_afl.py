@@ -6,6 +6,7 @@ from itertools import chain, count, repeat
 from os import chdir
 from pathlib import Path, PurePosixPath
 from subprocess import TimeoutExpired
+from types import SimpleNamespace
 
 import pytest
 from Collector.Collector import Collector
@@ -664,14 +665,17 @@ def test_afl_refresh_01(afl, mocker, tmp_path):
 def test_afl_refresh_02(afl, mocker, tmp_path):
     """AFL corpus refresh"""
     # setup
+    corpus_path = tmp_path / "refresh"
+    trace_path = corpus_path / "tests" / ".traces"
     stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    syncer.return_value.corpus = SimpleNamespace(path=corpus_path)
     mocker.patch("os.environ", {"LD_LIBRARY_PATH": "/test/lib"})
-    afl.args.corpus_refresh = tmp_path / "refresh"
+    afl.args.corpus_refresh = corpus_path
     (afl.aflbindir / "afl-cmin").touch()
 
     def fake_run(*_args, **kwds):
-        (tmp_path / "refresh" / "tests" / "min.bin").touch()
+        (corpus_path / "tests" / "min.bin").touch()
         assert "env" in kwds
         assert "LD_LIBRARY_PATH" in kwds["env"]
         ld_lib_path = tuple(Path(p) for p in kwds["env"]["LD_LIBRARY_PATH"].split(":"))
@@ -697,9 +701,43 @@ def test_afl_refresh_02(afl, mocker, tmp_path):
     # check
     assert result == 0
     assert syncer.return_value.method_calls == [
-        mocker.call.download_resource(ResourceType.CORPUS),
-        mocker.call.download_resource(ResourceType.QUEUE),
+        mocker.call.download_resource(ResourceType.CORPUS, corpus_path),
+        mocker.call.download_resource(ResourceType.QUEUE, corpus_path),
+        mocker.call.download_resource(ResourceType.TRACE, trace_path),
         mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]
     assert stats.return_value.write_file.call_count == 2
+
+
+def test_afl_refresh_keyboard_interrupt(afl, mocker, tmp_path):
+    """AFL corpus refresh KeyboardInterrupt handling"""
+    # setup
+    corpus_path = tmp_path / "refresh"
+    mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    syncer.return_value.corpus = SimpleNamespace(path=corpus_path)
+    afl.args.corpus_refresh = corpus_path
+    (afl.aflbindir / "afl-cmin").touch()
+
+    # Override the popen side_effect to handle afl-cmin specifically
+    def afl_cmin_side_effect(*_args, **_kwargs):
+        # Skip the fuzzer_stats creation for afl-cmin
+        return mocker.DEFAULT
+
+    afl.popen.side_effect = afl_cmin_side_effect
+
+    # Mock the Popen process to simulate KeyboardInterrupt during poll()
+    mock_proc = afl.popen.return_value
+    mock_proc.poll.side_effect = KeyboardInterrupt()
+    mock_proc.wait = mocker.Mock()
+
+    # Override sleep to not raise MainBreak for this test
+    afl.sleep.side_effect = None
+
+    # Test KeyboardInterrupt handling
+    with pytest.raises(KeyboardInterrupt):
+        afl.ret_main()
+
+    # Verify that proc.wait(10) was called when KeyboardInterrupt occurred
+    mock_proc.wait.assert_called_once_with(10)

@@ -7,6 +7,7 @@ from logging import DEBUG
 from os import chdir
 from pathlib import Path, PurePosixPath
 from shutil import rmtree
+from types import SimpleNamespace
 
 import pytest
 from Collector.Collector import Collector
@@ -390,13 +391,16 @@ def test_fuzzilli_08(fuzzilli):
 def test_fuzzilli_09(fuzzilli, mocker, tmp_path):
     """fuzzilli corpus refresh"""
     # setup
+    corpus_path = tmp_path / "refresh"
+    trace_path = corpus_path / "tests" / ".traces"
     stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
-    fuzzilli.args.corpus_refresh = tmp_path / "refresh"
+    syncer.return_value.corpus = SimpleNamespace(path=corpus_path)
+    fuzzilli.args.corpus_refresh = corpus_path
 
     def fake_run(*_args, **kwds):
-        (tmp_path / "refresh" / "tests" / "corpus").mkdir()
-        (tmp_path / "refresh" / "tests" / "corpus" / "min.js").touch()
+        (corpus_path / "tests" / "corpus").mkdir()
+        (corpus_path / "tests" / "corpus" / "min.js").touch()
         assert "env" in kwds
         assert "LD_LIBRARY_PATH" in kwds["env"]
         ld_lib_path = tuple(Path(p) for p in kwds["env"]["LD_LIBRARY_PATH"].split(":"))
@@ -416,8 +420,9 @@ def test_fuzzilli_09(fuzzilli, mocker, tmp_path):
     # check
     assert result == 0
     assert syncer.return_value.method_calls == [
-        mocker.call.download_resource(ResourceType.CORPUS),
-        mocker.call.download_resource(ResourceType.QUEUE),
+        mocker.call.download_resource(ResourceType.CORPUS, corpus_path),
+        mocker.call.download_resource(ResourceType.QUEUE, corpus_path),
+        mocker.call.download_resource(ResourceType.TRACE, trace_path),
         mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]

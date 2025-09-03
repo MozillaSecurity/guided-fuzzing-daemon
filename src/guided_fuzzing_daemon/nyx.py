@@ -90,14 +90,16 @@ def nyx_main(
                 str(timeout),
                 "-m",
                 "none",
-                "-X",
-                str(opts.sharedir),
             ]
+
+            if opts.corpus_refresh_resume:
+                env["AFL_KEEP_TRACES"] = "1"
+                afl_cmdline.append("-r")
 
             LOG.info("Running afl-cmin")
             # pylint: disable=consider-using-with
             proc: Popen[str] | None = Popen(
-                afl_cmdline,
+                [*afl_cmdline, "-X", str(opts.sharedir)],
                 env=env,
                 stderr=STDOUT,
                 stdout=log_tee.open_files[0].handle,

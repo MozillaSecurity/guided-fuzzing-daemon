@@ -7,6 +7,7 @@ from itertools import chain, count, repeat
 from os import chdir
 from pathlib import Path, PurePosixPath
 from subprocess import TimeoutExpired
+from types import SimpleNamespace
 
 import pytest
 from Collector.Collector import Collector
@@ -610,20 +611,24 @@ def test_nyx_refresh_01(mocker, nyx, tmp_path):
 def test_nyx_refresh_02(mocker, nyx, tmp_path):
     """nyx corpus refresh"""
     # setup
+    corpus_path = tmp_path / "refresh"
+    trace_path = corpus_path / "tests" / ".traces"
     stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
-    nyx.args.corpus_refresh = tmp_path / "refresh"
+    syncer.return_value.corpus = SimpleNamespace(path=corpus_path)
+    nyx.args.corpus_refresh = corpus_path
     (nyx.aflbindir / "afl-cmin").touch()
 
     def fake_run(*_args, **_kwds):
-        (tmp_path / "refresh" / "tests" / "min.bin").touch()
+        (corpus_path / "tests" / "min.bin").touch()
         return mocker.DEFAULT
 
-    def download_corpus(_path: ResourceType):
-        (tmp_path / "refresh" / "queues" / "config.sh").touch()
+    def download_resource(target: ResourceType, dest: Path):
+        if target == ResourceType.CORPUS:
+            (dest / "queues" / "config.sh").touch()
         return mocker.DEFAULT
 
-    syncer.return_value.download_resource.side_effect = download_corpus
+    syncer.return_value.download_resource.side_effect = download_resource
     nyx.args.stats = tmp_path / "stats"
     nyx.popen.side_effect = fake_run
     nyx.popen.return_value.poll.side_effect = chain(repeat(None, 35), [0])
@@ -636,8 +641,9 @@ def test_nyx_refresh_02(mocker, nyx, tmp_path):
     # check
     assert result == 0
     assert syncer.return_value.method_calls == [
-        mocker.call.download_resource(ResourceType.CORPUS),
-        mocker.call.download_resource(ResourceType.QUEUE),
+        mocker.call.download_resource(ResourceType.CORPUS, corpus_path),
+        mocker.call.download_resource(ResourceType.QUEUE, corpus_path),
+        mocker.call.download_resource(ResourceType.TRACE, trace_path),
         mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]

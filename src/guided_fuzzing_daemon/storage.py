@@ -371,6 +371,7 @@ class GoogleCloudStorage(CloudStorageProvider):
 class ResourceType(str, Enum):
     QUEUE = "queues"
     CORPUS = "corpus"
+    TRACE = "traces"
 
 
 @dataclass(init=False)
@@ -477,6 +478,37 @@ class CorpusSyncer:
             perf_counter() - start,
         )
 
+    def upload_traces(self) -> None:
+        assert self.project is not None
+        start = perf_counter()
+
+        uploaded = 0
+        traces_local = self.corpus.path / ".traces"
+
+        with TempPath() as tmpd:
+            trace_zip_remote = self.provider[self.project / "traces.zip"]
+            trace_zip_local = tmpd / "traces.zip"
+
+            with ZipFile(trace_zip_local, "w", ZIP_DEFLATED) as zfp:
+                for file in traces_local.iterdir():
+                    if file.name.startswith("."):
+                        continue
+                    if self.suffix is None or file.suffix == self.suffix:
+                        zfp.write(file, arcname=file.name)
+                        uploaded += 1
+
+            if uploaded:
+                trace_zip_remote.upload_from_file(trace_zip_local)
+                LOG.info("Uploaded ZIP: %s", trace_zip_local.name)
+            else:
+                LOG.warning("Traces directory is empty! Not deleting existing archive")
+
+        LOG.info(
+            "upload_traces() -> uploaded=%d (%.03fs)",
+            uploaded,
+            perf_counter() - start,
+        )
+
     def delete_queues(self) -> None:
         assert self.project is not None
         start = perf_counter()
@@ -490,13 +522,15 @@ class CorpusSyncer:
             perf_counter() - start,
         )
 
-    def download_resource(self, target: ResourceType) -> int:
+    def download_resource(self, target: ResourceType, dest: Path) -> int:
         assert self.project is not None
         start = perf_counter()
 
         paths = self.provider.iter(self.project / target.value)
         if target == ResourceType.CORPUS:
             paths = chain(paths, [self.provider[self.project / "corpus.zip"]])
+        elif target == ResourceType.TRACE:
+            paths = chain(paths, [self.provider[self.project / "traces.zip"]])
 
         total = 0
         downloaded = 0
@@ -516,7 +550,7 @@ class CorpusSyncer:
                         zips.append(out_path)
                     else:
                         # download directly to corpus path
-                        out_path = self.corpus.path / file.path.name
+                        out_path = dest / file.path.name
                         total += 1
 
                     executor.submit(file.download_to_file, out_path)
@@ -527,10 +561,10 @@ class CorpusSyncer:
                 with ZipFile(zip_file) as zf:
                     for entry in zf.infolist():
                         total += 1
-                        if (self.corpus.path / entry.filename).exists():
+                        if (dest / entry.filename).exists():
                             duplicates += 1
                         else:
-                            zf.extract(entry.filename, self.corpus.path)
+                            zf.extract(entry.filename, dest)
                             extracted += 1
                 zip_file.unlink()
 
@@ -567,6 +601,7 @@ class CorpusRefreshContext:
 
         self.refresh_stats = StatAggregator()
         self.refresh_stats.add_field("queue_files", GeneratedField())
+        self.refresh_stats.add_field("trace_files", GeneratedField())
         self.refresh_stats.add_field("corpus_pre", GeneratedField())
         self.refresh_stats.add_field("corpus_post", GeneratedField())
         self.refresh_stats.add_sys_stats()
@@ -576,13 +611,15 @@ class CorpusRefreshContext:
 
         # Ensure the directory for our new tests is empty
         self.updated_tests_dir = opts.corpus_refresh / "tests"
+        self.traces_dir = self.updated_tests_dir / ".traces"
         if self.updated_tests_dir.exists():
-            rmtree(self.updated_tests_dir)
-        self.updated_tests_dir.mkdir()
+            rmtree(self.updated_tests_dir, ignore_errors=True)
+        self.traces_dir.mkdir(parents=True)
+
         self.output_subdir = subdir
 
         try:
-            queue_downloader = CorpusSyncer(
+            syncer = CorpusSyncer(
                 self.storage, Corpus(self.queues_dir), self.project, self.suffix
             )
 
@@ -592,7 +629,9 @@ class CorpusRefreshContext:
                 self.cloud_path,
                 self.queues_dir,
             )
-            corpus_size = queue_downloader.download_resource(ResourceType.CORPUS)
+            corpus_size = syncer.download_resource(
+                ResourceType.CORPUS, syncer.corpus.path
+            )
             self.refresh_stats.fields["corpus_pre"].update(corpus_size)
 
             LOG.info(
@@ -600,8 +639,18 @@ class CorpusRefreshContext:
                 self.cloud_path,
                 self.queues_dir,
             )
-            queue_size = queue_downloader.download_resource(ResourceType.QUEUE)
+            queue_size = syncer.download_resource(
+                ResourceType.QUEUE, syncer.corpus.path
+            )
             self.refresh_stats.fields["queue_files"].update(queue_size)
+
+            LOG.info(
+                "Downloading traces from %s/traces/ to %s",
+                self.cloud_path,
+                self.traces_dir,
+            )
+            trace_size = syncer.download_resource(ResourceType.TRACE, self.traces_dir)
+            self.refresh_stats.fields["trace_files"].update(trace_size)
 
         except:  # noqa pylint: disable=bare-except
             try:
@@ -614,20 +663,32 @@ class CorpusRefreshContext:
         return self
 
     def __exit__(self, exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
-        if exc_type is not None:
-            if self.stats:
-                self.refresh_stats.write_file(self.stats, [])
-            raise
-
         updated_tests_dir = self.updated_tests_dir
         if self.output_subdir is not None:
             updated_tests_dir = updated_tests_dir / self.output_subdir
+        syncer = CorpusSyncer(
+            self.storage, Corpus(updated_tests_dir), self.project, self.suffix
+        )
+
+        if exc_type is not None:
+            if self.stats:
+                self.refresh_stats.write_file(self.stats, [])
+            # Catch SIGINT (via timeout -s 2 or ctrl+c)
+            if exc_type is KeyboardInterrupt:
+                # Reduction was interrupted - upload trace files
+                LOG.info(
+                    "Corpus refresh interrupted - uploading traces to %s/traces.zip",
+                    self.cloud_path,
+                )
+                syncer.upload_traces()
+            raise
 
         self.refresh_stats.fields["corpus_post"].update(
             sum(
                 1
                 for f in updated_tests_dir.iterdir()
-                if self.suffix is None or f.suffix == self.suffix
+                if (self.suffix is None or f.suffix == self.suffix)
+                and f.name != ".traces"
             )
         )
 
@@ -641,15 +702,12 @@ class CorpusRefreshContext:
 
         # replace existing corpus with reduced corpus
         LOG.info("Uploading reduced corpus to %s/corpus/", self.cloud_path)
-        corpus_uploader = CorpusSyncer(
-            self.storage, Corpus(updated_tests_dir), self.project, self.suffix
-        )
-        corpus_uploader.upload_corpus()
+        syncer.upload_corpus()
         for extra in self.extra_files:
             remote_obj = self.storage[
                 PurePosixPath(self.project) / "corpus" / extra.name
             ]
             remote_obj.upload_from_file(extra)
-        corpus_uploader.delete_queues()
+        syncer.delete_queues()
 
         self.exit_code = 0

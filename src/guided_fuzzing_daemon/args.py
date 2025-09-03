@@ -207,6 +207,11 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
         metavar="DIR",
     )
     storage_group.add_argument(
+        "--corpus-refresh-resume",
+        help="Check for previous traces when performing a corpus refresh",
+        action="store_true",
+    )
+    storage_group.add_argument(
         "--corpus-status",
         action="store_true",
         help="Display cloud storage corpus status",
@@ -496,6 +501,9 @@ def parse_args(argv: list[str] | None = None) -> Namespace:
 
     if opts.corpus_replace:
         LOG.warning("--corpus-replace is deprecated (now default behavior)")
+
+    if opts.corpus_refresh_resume and not opts.corpus_refresh:
+        parser.error("Corpus refresh resume mode specified without corpus refresh")
 
     if opts.mode == "nyx":
         if opts.rargs:

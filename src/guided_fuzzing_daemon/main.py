@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     if opts.corpus_download:
         opts.corpus_download.mkdir(exist_ok=True, parents=True)
         syncer = CorpusSyncer(storage, Corpus(opts.corpus_download), opts.project)
-        syncer.download_resource(ResourceType.CORPUS)
+        syncer.download_resource(ResourceType.CORPUS, syncer.corpus.path)
         return 0
 
     if opts.corpus_status:
@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if opts.queue_download:
         syncer = CorpusSyncer(storage, Corpus(opts.queue_download), opts.project)
-        syncer.download_resource(ResourceType.QUEUE)
+        syncer.download_resource(ResourceType.QUEUE, syncer.corpus.path)
         return 0
 
     if opts.queue_status:
