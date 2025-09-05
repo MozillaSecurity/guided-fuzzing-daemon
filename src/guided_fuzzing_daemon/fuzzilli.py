@@ -187,7 +187,9 @@ def main(
     assert binary.is_file()
 
     if opts.corpus_refresh:
-        with CorpusRefreshContext(opts, storage, "corpus", ".fzil") as merger:
+        with CorpusRefreshContext(
+            opts, storage, subdir="corpus", suffix=".fzil"
+        ) as merger:
             env = os.environ.copy()
             env["LD_LIBRARY_PATH"] = str(binary.parent)
 

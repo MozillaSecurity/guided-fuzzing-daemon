@@ -431,6 +431,45 @@ def test_context_refresh_suffix(tmp_path):
         assert set(zf.namelist()) == {"e.txt", "f.txt"}
 
 
+def test_context_keyboard_interrupt(mocker, tmp_path):
+    """test CorpusRefreshContext.__exit__ with KeyboardInterrupt"""
+    storage = LocalTestStorageProvider(tmp_path / "cloud")
+    (storage.root / "t_proj").mkdir()
+
+    refresh_dir = tmp_path / "refresh"
+    opts = Namespace(
+        bucket="t_bucket",
+        corpus_refresh=refresh_dir,
+        project="t_proj",
+        provider="s3",
+        stats=tmp_path / "stats",
+    )
+
+    # Mock CorpusSyncer methods
+    mock_upload_queue = mocker.patch(
+        "guided_fuzzing_daemon.storage.CorpusSyncer.upload_queue"
+    )
+    mock_delete_queues = mocker.patch(
+        "guided_fuzzing_daemon.storage.CorpusSyncer.delete_queues"
+    )
+    mock_upload_corpus = mocker.patch(
+        "guided_fuzzing_daemon.storage.CorpusSyncer.upload_corpus"
+    )
+
+    # Test KeyboardInterrupt handling
+    with pytest.raises(KeyboardInterrupt):
+        with CorpusRefreshContext(opts, storage) as merger:
+            # Create some files in updated_tests_dir so upload methods get called
+            merger.updated_tests_dir.mkdir(parents=True, exist_ok=True)
+            (merger.updated_tests_dir / "test_file.bin").write_text("test")
+            raise KeyboardInterrupt()
+
+    # Verify queue methods were called
+    mock_upload_queue.assert_called_once()
+    mock_delete_queues.assert_called_once()
+    mock_upload_corpus.assert_called_once()
+
+
 def test_gcsfile_01(gcsfile):
     """test GCSFile.refresh()"""
     assert gcsfile._modified is None  # pylint: disable=protected-access

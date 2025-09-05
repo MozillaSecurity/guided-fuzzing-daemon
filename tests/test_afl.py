@@ -6,6 +6,7 @@ from itertools import chain, count, repeat
 from os import chdir
 from pathlib import Path, PurePosixPath
 from subprocess import TimeoutExpired
+from types import SimpleNamespace
 
 import pytest
 from Collector.Collector import Collector
@@ -664,14 +665,27 @@ def test_afl_refresh_01(afl, mocker, tmp_path):
 def test_afl_refresh_02(afl, mocker, tmp_path):
     """AFL corpus refresh"""
     # setup
+    refresh_path = tmp_path / "refresh"
+    corpus_path = refresh_path / "corpus"
+    queues_path = refresh_path / "queues"
     stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
     mocker.patch("os.environ", {"LD_LIBRARY_PATH": "/test/lib"})
-    afl.args.corpus_refresh = tmp_path / "refresh"
+    afl.args.corpus_refresh = refresh_path
     (afl.aflbindir / "afl-cmin").touch()
 
+    # Mock download_resource to create test files in both directories
+    def download_resource(resource_type, _dest_path=None):
+        if resource_type == ResourceType.CORPUS:
+            (corpus_path / "test1").write_text("test")
+        elif resource_type == ResourceType.QUEUE:
+            (queues_path / "test2").write_text("test")
+        return mocker.DEFAULT
+
+    syncer.return_value.download_resource.side_effect = download_resource
+
     def fake_run(*_args, **kwds):
-        (tmp_path / "refresh" / "tests" / "min.bin").touch()
         assert "env" in kwds
         assert "LD_LIBRARY_PATH" in kwds["env"]
         ld_lib_path = tuple(Path(p) for p in kwds["env"]["LD_LIBRARY_PATH"].split(":"))
@@ -682,12 +696,19 @@ def test_afl_refresh_02(afl, mocker, tmp_path):
             binary.parent
         )
         assert ld_lib_path.index(binary.parent) < ld_lib_path.index(Path("/test/lib"))
+
+        updated_tests_dir = refresh_path / "tests" / ".traces"
+        updated_tests_dir.mkdir(parents=True, exist_ok=True)
+        (updated_tests_dir / "min1.bin").write_text("minimized_test")
+
         return mocker.DEFAULT
 
     binary = tmp_path / "firefox" / "firefox"
     afl.args.stats = tmp_path / "stats"
     afl.popen.side_effect = fake_run
-    afl.popen.return_value.poll.side_effect = chain(repeat(None, 35), [0])
+    afl.popen.return_value.poll.side_effect = chain(
+        repeat(None, 35), [0], repeat(None, 35), [0]
+    )
     afl.sleep.side_effect = repeat(None)
     afl.popen.return_value.wait.return_value = 0
 
@@ -697,9 +718,115 @@ def test_afl_refresh_02(afl, mocker, tmp_path):
     # check
     assert result == 0
     assert syncer.return_value.method_calls == [
-        mocker.call.download_resource(ResourceType.CORPUS),
-        mocker.call.download_resource(ResourceType.QUEUE),
+        mocker.call.download_resource(ResourceType.CORPUS, corpus_path),
+        mocker.call.download_resource(ResourceType.QUEUE, queues_path),
         mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]
-    assert stats.return_value.write_file.call_count == 2
+    assert stats.return_value.write_file.call_count == 3
+
+
+def test_afl_refresh_keyboard_interrupt_corpus_collection(afl, mocker, tmp_path):
+    """AFL corpus refresh KeyboardInterrupt during corpus trace collection"""
+    refresh_path = tmp_path / "refresh"
+    mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
+    afl.args.corpus_refresh = refresh_path
+    (afl.aflbindir / "afl-cmin").touch()
+
+    corpus_path = refresh_path / "corpus"
+    queues_path = refresh_path / "queues"
+
+    # Mock download_resource to create test files
+    def download_resource(resource_type, _dest_path=None):
+        if resource_type == ResourceType.CORPUS:
+            (corpus_path / "test1").write_text("test")
+        elif resource_type == ResourceType.QUEUE:
+            (queues_path / "test2").write_text("test")
+        return mocker.DEFAULT
+
+    syncer.return_value.download_resource.side_effect = download_resource
+
+    def fake_run(*_args, **_kwargs):
+        # Raise KeyboardInterrupt on first iteration
+        raise KeyboardInterrupt()
+
+    afl.popen.side_effect = fake_run
+
+    with pytest.raises(KeyboardInterrupt):
+        afl.ret_main()
+
+    # Verify that afl-cmin was never run on queues
+    assert afl.popen.call_count == 1
+
+
+def test_afl_refresh_keyboard_interrupt_queue_collection(afl, mocker, tmp_path):
+    """AFL corpus refresh KeyboardInterrupt during queue trace collection"""
+    refresh_path = tmp_path / "refresh"
+    mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
+    afl.args.corpus_refresh = refresh_path
+    (afl.aflbindir / "afl-cmin").touch()
+
+    corpus_path = refresh_path / "corpus"
+    queues_path = refresh_path / "queues"
+
+    def download_resource(resource_type, _dest_path=None):
+        if resource_type == ResourceType.CORPUS:
+            (corpus_path / "test1").write_text("test")
+        elif resource_type == ResourceType.QUEUE:
+            (queues_path / "test2").write_text("test")
+
+        return mocker.DEFAULT
+
+    syncer.return_value.download_resource.side_effect = download_resource
+
+    # Override the default side_effect since we're calling afl-cmin not afl-fuzz
+    # Create output files after first popen call
+    def fake_popen(*_args, **_kwargs):
+        if afl.popen.call_count == 1:
+            # After first call (corpus processing), create output files
+            updated_tests_dir = refresh_path / "tests" / ".traces"
+            updated_tests_dir.mkdir(parents=True, exist_ok=True)
+            (updated_tests_dir / "min1.bin").write_text("minimized_test")
+        return mocker.DEFAULT
+
+    afl.popen.side_effect = fake_popen
+
+    # Override sleep to not raise MainBreak for this test
+    afl.sleep.side_effect = repeat(None)
+
+    mock_proc = afl.popen.return_value
+
+    # Corpus trace: poll once then return None
+    # Queue trace: raise KeyboardInterrupt during poll
+    mock_proc.poll.side_effect = [None, 0, KeyboardInterrupt()]
+    mock_proc.wait.return_value = 0
+
+    with pytest.raises(KeyboardInterrupt):
+        afl.ret_main()
+
+    # Verify that process_proc was started after the interrupt
+    assert afl.popen.call_count == 3
+    assert mock_proc.wait.call_count >= 1
+
+    call_args_list = afl.popen.call_args_list
+
+    # Corpus trace collection
+    first_call_args = call_args_list[0][0][0]
+    assert str(afl.aflbindir / "afl-cmin") == first_call_args[0]
+    assert "-i" in first_call_args
+    assert "-c" in first_call_args
+
+    # Queue trace collection
+    second_call_args = call_args_list[1][0][0]
+    assert str(afl.aflbindir / "afl-cmin") == second_call_args[0]
+    assert "-i" in second_call_args
+    assert "-c" in second_call_args
+
+    # Process traces
+    third_call_args = call_args_list[2][0][0]
+    assert str(afl.aflbindir / "afl-cmin") == third_call_args[0]
+    assert "-p" in third_call_args
