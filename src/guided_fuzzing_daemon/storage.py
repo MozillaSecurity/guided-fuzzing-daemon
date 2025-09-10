@@ -681,7 +681,7 @@ class CorpusRefreshContext:
             if exc_type is KeyboardInterrupt:
                 if not update_post_stats(updated_tests_dir):
                     self.exit_code = 2
-                    return
+                    return None
                 upload_corpus()
 
                 LOG.info("Pruning queues and uploading to %s/queues/", self.cloud_path)
@@ -694,14 +694,15 @@ class CorpusRefreshContext:
                     ]
                 )
                 queue_syncer.delete_queues()
-            raise
+            return None
 
         if not update_post_stats(updated_tests_dir):
             self.exit_code = 2
-            return
+            return None
 
         # replace existing corpus with reduced corpus
         upload_corpus()
         corpus_syncer.delete_queues()
 
         self.exit_code = 0
+        return None
