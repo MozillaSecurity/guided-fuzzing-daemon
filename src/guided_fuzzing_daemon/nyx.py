@@ -142,7 +142,8 @@ def nyx_main(
                     try:
                         collect_proc.wait(timeout=2)
                     except TimeoutExpired:
-                        os.killpg(os.getpgid(collect_proc.pid), signal.SIGTERM)
+                        # SIGKILL is needed to ensure Nyx/Qemu processes are terminated
+                        os.killpg(os.getpgid(collect_proc.pid), signal.SIGKILL)
                         collect_proc.wait(timeout=5)
                 raise
             finally:

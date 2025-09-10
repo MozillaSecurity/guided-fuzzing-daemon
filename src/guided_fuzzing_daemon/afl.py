@@ -221,7 +221,7 @@ def afl_main(
                     try:
                         collect_proc.wait(timeout=2)
                     except TimeoutExpired:
-                        os.killpg(os.getpgid(collect_proc.pid), signal.SIGKILL)
+                        os.killpg(os.getpgid(collect_proc.pid), signal.SIGTERM)
                         collect_proc.wait(timeout=5)
                 raise
             finally:
