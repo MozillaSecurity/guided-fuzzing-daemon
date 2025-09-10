@@ -7,6 +7,7 @@ from itertools import chain, count, repeat
 from os import chdir
 from pathlib import Path, PurePosixPath
 from subprocess import TimeoutExpired
+from types import SimpleNamespace
 
 import pytest
 from Collector.Collector import Collector
@@ -610,23 +611,39 @@ def test_nyx_refresh_01(mocker, nyx, tmp_path):
 def test_nyx_refresh_02(mocker, nyx, tmp_path):
     """nyx corpus refresh"""
     # setup
+    refresh_path = tmp_path / "refresh"
+    corpus_path = refresh_path / "corpus"
+    queues_path = refresh_path / "queues"
     stats = mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
-    nyx.args.corpus_refresh = tmp_path / "refresh"
+    syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
+    nyx.args.corpus_refresh = refresh_path
     (nyx.aflbindir / "afl-cmin").touch()
 
     def fake_run(*_args, **_kwds):
-        (tmp_path / "refresh" / "tests" / "min.bin").touch()
+        updated_tests_dir = refresh_path / "tests" / ".traces"
+        updated_tests_dir.mkdir(parents=True, exist_ok=True)
+        (updated_tests_dir / "min1.bin").write_text("minimized_test")
+
         return mocker.DEFAULT
 
-    def download_corpus(_path: ResourceType):
-        (tmp_path / "refresh" / "queues" / "config.sh").touch()
+    def download_resource(target: ResourceType, _dest=None):
+        if target == ResourceType.CORPUS:
+            (corpus_path / "config.sh").touch()
+            (corpus_path / "test1").write_text("test")
+        if target == ResourceType.QUEUE:
+            (queues_path / "config.sh").touch()
+            (queues_path / "test2").write_text("test")
         return mocker.DEFAULT
 
-    syncer.return_value.download_resource.side_effect = download_corpus
+    syncer.return_value.download_resource.side_effect = download_resource
+
+    syncer.return_value.download_resource.side_effect = download_resource
     nyx.args.stats = tmp_path / "stats"
     nyx.popen.side_effect = fake_run
-    nyx.popen.return_value.poll.side_effect = chain(repeat(None, 35), [0])
+    nyx.popen.return_value.poll.side_effect = chain(
+        repeat(None, 35), [0], repeat(None, 35), [0]
+    )
     nyx.sleep.side_effect = repeat(None)
     nyx.popen.return_value.wait.return_value = 0
 
@@ -636,9 +653,119 @@ def test_nyx_refresh_02(mocker, nyx, tmp_path):
     # check
     assert result == 0
     assert syncer.return_value.method_calls == [
-        mocker.call.download_resource(ResourceType.CORPUS),
-        mocker.call.download_resource(ResourceType.QUEUE),
+        mocker.call.download_resource(ResourceType.CORPUS, corpus_path),
+        mocker.call.download_resource(ResourceType.QUEUE, queues_path),
         mocker.call.upload_corpus(),
         mocker.call.delete_queues(),
     ]
-    assert stats.return_value.write_file.call_count == 2
+    assert stats.return_value.write_file.call_count == 3
+
+
+def test_nyx_refresh_keyboard_interrupt_corpus_collection(nyx, mocker, tmp_path):
+    """Nyx corpus refresh KeyboardInterrupt during corpus trace collection"""
+    refresh_path = tmp_path / "refresh"
+    corpus_path = refresh_path / "corpus"
+    queues_path = refresh_path / "queues"
+    mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
+    nyx.args.corpus_refresh = refresh_path
+    (nyx.aflbindir / "afl-cmin").touch()
+
+    def fake_run(*_args, **_kwargs):
+        # Raise KeyboardInterrupt on first iteration
+        raise KeyboardInterrupt()
+
+    def download_resource(target: ResourceType, _dest=None):
+        if target == ResourceType.CORPUS:
+            (corpus_path / "config.sh").touch()
+            (corpus_path / "test1").write_text("test")
+        if target == ResourceType.QUEUE:
+            (queues_path / "config.sh").touch()
+            (queues_path / "test2").write_text("test")
+        return mocker.DEFAULT
+
+    syncer.return_value.download_resource.side_effect = download_resource
+    nyx.popen.side_effect = fake_run
+
+    # Override sleep to not raise MainBreak for this test
+    nyx.sleep.side_effect = None
+
+    with pytest.raises(KeyboardInterrupt):
+        nyx.ret_main()
+
+    # Verify that afl-cmin was never run on queues
+    assert nyx.popen.call_count == 1
+
+
+def test_nyx_refresh_keyboard_interrupt_queue_collection(nyx, mocker, tmp_path):
+    """Nyx corpus refresh KeyboardInterrupt during queue trace collection"""
+    refresh_path = tmp_path / "refresh"
+    mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
+    syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
+    syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
+    nyx.args.corpus_refresh = refresh_path
+    (nyx.aflbindir / "afl-cmin").touch()
+
+    corpus_path = refresh_path / "corpus"
+    queues_path = refresh_path / "queues"
+
+    def fake_run(*_args, **_kwargs):
+        if nyx.popen.call_count == 1:
+            # After first call (corpus processing), create output files
+            updated_tests_dir = refresh_path / "tests" / ".traces"
+            updated_tests_dir.mkdir(parents=True, exist_ok=True)
+            (updated_tests_dir / "min1.bin").write_text("minimized_test")
+        elif nyx.popen.call_count == 2:  # Second call (second iteration)
+            raise KeyboardInterrupt()
+        return mocker.DEFAULT
+
+    def download_resource(target: ResourceType, _dest=None):
+        if target == ResourceType.CORPUS:
+            (corpus_path / "config.sh").touch()
+            (corpus_path / "test1").write_text("test")
+        if target == ResourceType.QUEUE:
+            (queues_path / "config.sh").touch()
+            (queues_path / "test2").write_text("test")
+        return mocker.DEFAULT
+
+    syncer.return_value.download_resource.side_effect = download_resource
+    nyx.popen.side_effect = fake_run
+
+    # Corpus trace: poll once then return None
+    # Queue trace: raise KeyboardInterrupt during poll
+    mock_proc = nyx.popen.return_value
+    mock_proc.poll.side_effect = [None, 0, KeyboardInterrupt()]
+    mock_proc.wait.return_value = 0
+
+    # Override sleep to not raise MainBreak for this test
+    nyx.sleep.side_effect = repeat(None)
+
+    with pytest.raises(KeyboardInterrupt):
+        nyx.ret_main()
+
+    # Verify that process_proc was started after the interrupt
+    assert nyx.popen.call_count == 3
+    assert mock_proc.wait.call_count >= 1
+
+    # Validate arguments passed to Popen calls
+    call_args_list = nyx.popen.call_args_list
+
+    # Corpus trace collection
+    first_call_args = call_args_list[0][0][0]
+    assert str(nyx.aflbindir / "afl-cmin") == first_call_args[0]
+    assert "-i" in first_call_args
+    assert "-c" in first_call_args
+    assert "-X" in first_call_args
+
+    # Queue trace collection
+    second_call_args = call_args_list[1][0][0]
+    assert str(nyx.aflbindir / "afl-cmin") == second_call_args[0]
+    assert "-i" in second_call_args
+    assert "-c" in second_call_args
+
+    # Process traces
+    third_call_args = call_args_list[2][0][0]
+    assert str(nyx.aflbindir / "afl-cmin") == third_call_args[0]
+    assert "-p" in third_call_args
+    assert "-X" in third_call_args

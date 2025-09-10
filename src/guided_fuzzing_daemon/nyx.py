@@ -58,17 +58,21 @@ def nyx_main(
             return 2
 
         with (
-            CorpusRefreshContext(opts, storage, extra_files=[config_file]) as merger,
+            CorpusRefreshContext(
+                opts, storage, separate_corpus=True, extra_files=[config_file]
+            ) as merger,
             TempPath() as tmp_base,
             LogTee(opts.afl_hide_logs, opts.instances) as log_tee,
         ):
             # Copy config.sh to sharedir
-            if not (merger.queues_dir / "config.sh").exists():
+            for src_dir in (merger.queues_dir, merger.corpus_dir):
+                if (src_dir / "config.sh").exists():
+                    move(src_dir / "config.sh", config_file)
+                    break
+            else:
                 raise RuntimeError(
                     "Cannot refresh corpus without config.sh file. Aborting..."
                 )
-
-            move(merger.queues_dir / "config.sh", config_file)
 
             log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, 0))
 
@@ -79,40 +83,93 @@ def nyx_main(
                 else:
                     env["AFL_NYX_LOG"] = opts.nyx_log_pattern
 
-            afl_cmdline = [
+            base_args = [
                 str(afl_cmin),
                 "-e",
-                "-i",
-                str(merger.queues_dir),
                 "-o",
                 str(merger.updated_tests_dir),
                 "-t",
                 str(timeout),
                 "-m",
                 "none",
-                "-X",
-                str(opts.sharedir),
             ]
 
             LOG.info("Running afl-cmin")
-            # pylint: disable=consider-using-with
-            proc: Popen[str] | None = Popen(
-                afl_cmdline,
-                env=env,
-                stderr=STDOUT,
-                stdout=log_tee.open_files[0].handle,
-                text=True,
-            )
-
             last_stats_report = 0.0
-            assert proc is not None
-            while proc.poll() is None:
-                # Calculate stats
-                if opts.stats and last_stats_report < time() - STATS_UPLOAD_PERIOD:
-                    merger.refresh_stats.write_file(opts.stats, [])
-                    last_stats_report = time()
-                sleep(0.1)
-            assert not proc.wait()
+            collect_proc = None
+
+            i = 0
+            input_dirs = [merger.corpus_dir, merger.queues_dir]
+            try:
+                for i, input_dir in enumerate(input_dirs):
+                    if not any(f.is_file() for f in input_dir.iterdir()):
+                        continue
+                    # pylint: disable=consider-using-with
+                    collect_proc = Popen(
+                        [
+                            *base_args,
+                            "-i",
+                            str(input_dir),
+                            "-c",
+                            "-X",
+                            str(opts.sharedir),
+                        ],
+                        stderr=STDOUT,
+                        stdout=log_tee.open_files[0].handle,
+                        text=True,
+                        env=env,
+                        start_new_session=True,
+                    )
+
+                    assert collect_proc is not None
+                    while collect_proc.poll() is None:
+                        if (
+                            opts.stats
+                            and last_stats_report < time() - STATS_UPLOAD_PERIOD
+                        ):
+                            merger.refresh_stats.write_file(opts.stats, [])
+                            last_stats_report = time()
+                        sleep(0.1)
+                    assert not collect_proc.wait()
+
+            except KeyboardInterrupt:
+                if i == 0:
+                    LOG.warning("Interrupt detected during initial corpus processing")
+                    raise
+
+                LOG.warning("Interrupt detected - processing the results we have")
+                if collect_proc is not None:
+                    try:
+                        collect_proc.wait(timeout=2)
+                    except TimeoutExpired:
+                        # SIGKILL is needed to ensure Nyx/Qemu processes are terminated
+                        os.killpg(os.getpgid(collect_proc.pid), signal.SIGKILL)
+                        collect_proc.wait(timeout=5)
+                raise
+            finally:
+                if i > 0:
+                    trace_path = merger.updated_tests_dir / ".traces"
+                    if not any(f.is_file() for f in trace_path.iterdir()):
+                        LOG.error("No results found in the test directory!")
+                    else:
+                        # pylint: disable=consider-using-with
+                        process_proc = Popen(
+                            [
+                                *base_args,
+                                "-i",
+                                str(merger.corpus_dir),
+                                "-i",
+                                str(merger.queues_dir),
+                                "-p",
+                                "-X",
+                                str(opts.sharedir),
+                            ],
+                            stderr=STDOUT,
+                            stdout=log_tee.open_files[0].handle,
+                            text=True,
+                            env=env,
+                        )
+                        assert not process_proc.wait()
 
         assert merger.exit_code is not None
         return merger.exit_code
