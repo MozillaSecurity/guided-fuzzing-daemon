@@ -630,7 +630,13 @@ def test_nyx_refresh_02(mocker, nyx, tmp_path):
     def download_resource(target: ResourceType, _dest=None):
         if target == ResourceType.CORPUS:
             (corpus_path / "config.sh").touch()
+            (corpus_path / "test1").write_text("test")
+        if target == ResourceType.QUEUE:
+            (queues_path / "config.sh").touch()
+            (queues_path / "test2").write_text("test")
         return mocker.DEFAULT
+
+    syncer.return_value.download_resource.side_effect = download_resource
 
     syncer.return_value.download_resource.side_effect = download_resource
     nyx.args.stats = tmp_path / "stats"
@@ -659,6 +665,7 @@ def test_nyx_refresh_keyboard_interrupt_corpus_collection(nyx, mocker, tmp_path)
     """Nyx corpus refresh KeyboardInterrupt during corpus trace collection"""
     refresh_path = tmp_path / "refresh"
     corpus_path = refresh_path / "corpus"
+    queues_path = refresh_path / "queues"
     mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
     syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
@@ -672,6 +679,10 @@ def test_nyx_refresh_keyboard_interrupt_corpus_collection(nyx, mocker, tmp_path)
     def download_resource(target: ResourceType, _dest=None):
         if target == ResourceType.CORPUS:
             (corpus_path / "config.sh").touch()
+            (corpus_path / "test1").write_text("test")
+        if target == ResourceType.QUEUE:
+            (queues_path / "config.sh").touch()
+            (queues_path / "test2").write_text("test")
         return mocker.DEFAULT
 
     syncer.return_value.download_resource.side_effect = download_resource
