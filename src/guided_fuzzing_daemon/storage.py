@@ -412,7 +412,9 @@ class CorpusSyncer:
         ]
 
         # remove deprecated corpus.zip at project root
-        to_delete.append(self.provider[self.project / "corpus.zip"])
+        legacy_corpus = self.provider[self.project / "corpus.zip"]
+        if legacy_corpus.exists():
+            to_delete.append(legacy_corpus)
 
         with TempPath() as tmpd:
             corpus_zip_remote = self.provider[self.project / "corpus" / "corpus.zip"]
