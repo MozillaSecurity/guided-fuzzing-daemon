@@ -54,6 +54,7 @@ def test_afl_stats_01(mocker, tmp_path):
         "corpus_variable": "26",
         "saved_crashes": "8",
         "saved_hangs": "13",
+        "stability": "0 total (nan-nan min/max)",
         "exec_timeout": "25000",
         "cycles_done": "1 (1×), 3 (1×)",  # noqa: RUF001
         "bitmap_cvg": "0.09% avg (0.04%-0.13% min/max)",
@@ -79,6 +80,7 @@ def test_afl_stats_02(mocker, tmp_path):
         "corpus_variable   : 13\n"
         "saved_crashes     : 7\n"
         "saved_hangs       : 4\n"
+        "stability         : 0 total (nan-nan min/max)\n"
         "cycles_done       : 3\n"
         "bitmap_cvg        : 0.13%\n"
         "last_find         : 1696207996\n"
@@ -96,6 +98,7 @@ def test_afl_stats_02(mocker, tmp_path):
         "corpus_variable": "13",
         "saved_crashes": "7",
         "saved_hangs": "4",
+        "stability": "0 total (nan-nan min/max)",
         "exec_timeout": "nan",
         "cycles_done": "3 (1×)",  # noqa: RUF001
         "bitmap_cvg": "0.13% avg (0.13%-0.13% min/max)",
