@@ -687,9 +687,6 @@ def test_nyx_refresh_keyboard_interrupt_corpus_collection(nyx, mocker, tmp_path)
     syncer.return_value.download_resource.side_effect = download_resource
     nyx.popen.side_effect = fake_run
 
-    # Override sleep to not raise MainBreak for this test
-    nyx.sleep.side_effect = None
-
     with pytest.raises(KeyboardInterrupt):
         nyx.ret_main()
 
