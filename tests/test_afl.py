@@ -737,7 +737,10 @@ def test_afl_refresh_keyboard_interrupt_corpus_collection(afl, mocker, tmp_path)
     corpus_path = refresh_path / "corpus"
     queues_path = refresh_path / "queues"
 
-    # Mock download_resource to create test files
+    def fake_run(*_args, **_kwargs):
+        # Raise KeyboardInterrupt on first iteration
+        raise KeyboardInterrupt()
+
     def download_resource(resource_type, _dest_path=None):
         if resource_type == ResourceType.CORPUS:
             (corpus_path / "test1").write_text("test")
@@ -746,11 +749,6 @@ def test_afl_refresh_keyboard_interrupt_corpus_collection(afl, mocker, tmp_path)
         return mocker.DEFAULT
 
     syncer.return_value.download_resource.side_effect = download_resource
-
-    def fake_run(*_args, **_kwargs):
-        # Raise KeyboardInterrupt on first iteration
-        raise KeyboardInterrupt()
-
     afl.popen.side_effect = fake_run
 
     with pytest.raises(KeyboardInterrupt):
@@ -774,19 +772,7 @@ def test_afl_refresh_keyboard_interrupt_queue_collection(afl, mocker, tmp_path):
     corpus_path = refresh_path / "corpus"
     queues_path = refresh_path / "queues"
 
-    def download_resource(resource_type, _dest_path=None):
-        if resource_type == ResourceType.CORPUS:
-            (corpus_path / "test1").write_text("test")
-        elif resource_type == ResourceType.QUEUE:
-            (queues_path / "test2").write_text("test")
-
-        return mocker.DEFAULT
-
-    syncer.return_value.download_resource.side_effect = download_resource
-
-    # Override the default side_effect since we're calling afl-cmin not afl-fuzz
-    # Create output files after first popen call
-    def fake_popen(*_args, **_kwargs):
+    def fake_run(*_args, **_kwargs):
         if afl.popen.call_count == 1:
             # After first call (corpus processing), create output files
             updated_tests_dir = refresh_path / "tests"
@@ -794,9 +780,19 @@ def test_afl_refresh_keyboard_interrupt_queue_collection(afl, mocker, tmp_path):
             trace_dir.mkdir(parents=True, exist_ok=True)
             (updated_tests_dir / "test.bin").write_text("testcase")
             (trace_dir / "test.bin").write_text("12345")
+        elif afl.popen.call_count == 2:  # Second call (second iteration)
+            raise KeyboardInterrupt()
         return mocker.DEFAULT
 
-    afl.popen.side_effect = fake_popen
+    def download_resource(target: ResourceType, _dest=None):
+        if target == ResourceType.CORPUS:
+            (corpus_path / "test1").write_text("test")
+        if target == ResourceType.QUEUE:
+            (queues_path / "test2").write_text("test")
+        return mocker.DEFAULT
+
+    syncer.return_value.download_resource.side_effect = download_resource
+    afl.popen.side_effect = fake_run
 
     # Override sleep to not raise MainBreak for this test
     afl.sleep.side_effect = repeat(None)
