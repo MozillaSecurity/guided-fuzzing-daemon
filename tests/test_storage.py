@@ -465,13 +465,27 @@ def test_context_keyboard_interrupt(mocker, tmp_path):
         with CorpusRefreshContext(opts, storage) as merger:
             # Create some files in updated_tests_dir so upload methods get called
             merger.updated_tests_dir.mkdir(parents=True, exist_ok=True)
-            (merger.updated_tests_dir / "test_file.bin").write_text("test")
+
+            # Create mock testcases
+            (merger.updated_tests_dir / "a.bin").write_text("test")
+            (merger.updated_tests_dir / "b.bin").write_text("test")
+
+            # Create hidden files (should be excluded from corpus_post count)
+            (merger.updated_tests_dir / ".hidden_file").write_text("hidden")
+
+            # Create directories (should be excluded from corpus_post count)
+            (merger.updated_tests_dir / "traces").mkdir()
+
             raise KeyboardInterrupt()
 
     # Verify queue methods were called
     mock_upload_queue.assert_called_once()
     mock_delete_queues.assert_called_once()
     mock_upload_corpus.assert_called_once()
+
+    # Verify that corpus_post excludes hidden files and directories
+    stats = _read_stats(tmp_path / "stats")
+    assert stats["corpus_post"] == "2"
 
 
 def test_gcsfile_01(gcsfile):

@@ -647,9 +647,11 @@ class CorpusRefreshContext:
 
     def __exit__(self, exc_type: Any, _exc_val: Any, _exc_tb: Any) -> None:
         def update_post_stats(src: Path) -> bool:
-            corpus_post = src.iterdir()
+            corpus_post = [
+                f for f in src.iterdir() if f.is_file() and not f.name.startswith(".")
+            ]
             if self.suffix is not None:
-                corpus_post = (f for f in corpus_post if f.suffix == self.suffix)
+                corpus_post = [f for f in corpus_post if f.suffix == self.suffix]
             self.refresh_stats.fields["corpus_post"].update(sum(1 for _ in corpus_post))
 
             if self.stats:
