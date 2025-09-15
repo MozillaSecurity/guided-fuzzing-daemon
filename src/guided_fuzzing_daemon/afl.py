@@ -47,6 +47,7 @@ class AFLStats(StatAggregator):
         super().__init__()
         self.add_field("execs_done", SumMinMaxField())
         self.add_field("execs_per_sec", SumMinMaxField())
+        self.add_field("stability", SumMinMaxField())
         self.add_field("pending_favs", SumField())
         self.add_field("pending_total", SumField())
         self.add_field("corpus_variable", SumField())
