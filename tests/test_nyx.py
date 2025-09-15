@@ -666,7 +666,6 @@ def test_nyx_refresh_keyboard_interrupt_corpus_collection(nyx, mocker, tmp_path)
     refresh_path = tmp_path / "refresh"
     corpus_path = refresh_path / "corpus"
     queues_path = refresh_path / "queues"
-    mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
     syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
     nyx.args.corpus_refresh = refresh_path
@@ -697,11 +696,13 @@ def test_nyx_refresh_keyboard_interrupt_corpus_collection(nyx, mocker, tmp_path)
     # Verify that afl-cmin was never run on queues
     assert nyx.popen.call_count == 1
 
+    # Verify upload corpus was never called
+    assert syncer.return_value.upload_corpus.call_count == 0
+
 
 def test_nyx_refresh_keyboard_interrupt_queue_collection(nyx, mocker, tmp_path):
     """Nyx corpus refresh KeyboardInterrupt during queue trace collection"""
     refresh_path = tmp_path / "refresh"
-    mocker.patch("guided_fuzzing_daemon.storage.StatAggregator", autospec=True)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
     syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
     nyx.args.corpus_refresh = refresh_path
@@ -713,9 +714,11 @@ def test_nyx_refresh_keyboard_interrupt_queue_collection(nyx, mocker, tmp_path):
     def fake_run(*_args, **_kwargs):
         if nyx.popen.call_count == 1:
             # After first call (corpus processing), create output files
-            updated_tests_dir = refresh_path / "tests" / ".traces"
-            updated_tests_dir.mkdir(parents=True, exist_ok=True)
-            (updated_tests_dir / "min1.bin").write_text("minimized_test")
+            updated_tests_dir = refresh_path / "tests"
+            trace_dir = updated_tests_dir / ".traces"
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            (updated_tests_dir / "test.bin").write_text("testcase")
+            (trace_dir / "test.bin").write_text("12345")
         elif nyx.popen.call_count == 2:  # Second call (second iteration)
             raise KeyboardInterrupt()
         return mocker.DEFAULT
@@ -747,6 +750,9 @@ def test_nyx_refresh_keyboard_interrupt_queue_collection(nyx, mocker, tmp_path):
     # Verify that process_proc was started after the interrupt
     assert nyx.popen.call_count == 3
     assert mock_proc.wait.call_count >= 1
+
+    # Verify upload corpus was called
+    assert syncer.return_value.upload_corpus.call_count == 1
 
     # Validate arguments passed to Popen calls
     call_args_list = nyx.popen.call_args_list
