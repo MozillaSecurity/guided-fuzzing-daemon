@@ -24,6 +24,7 @@ def test_afl_stats_01(mocker, tmp_path):
         "exec_timeout      : 20000\n"
         "cycles_done       : 3\n"
         "bitmap_cvg        : 0.13%\n"
+        "stability         : 98.48%\n"
         "last_find         : 1696207996\n"
     )
     (tmp_path / "1").mkdir()
@@ -38,6 +39,7 @@ def test_afl_stats_01(mocker, tmp_path):
         "exec_timeout      : 30000\n"
         "cycles_done       : 1\n"
         "bitmap_cvg        : 0.04%\n"
+        "stability         : 75.12%\n"
         "last_find         : 1726207996\n"
         "random_crap       : who cares\n"
     )
@@ -54,10 +56,10 @@ def test_afl_stats_01(mocker, tmp_path):
         "corpus_variable": "26",
         "saved_crashes": "8",
         "saved_hangs": "13",
-        "stability": "0 total (nan-nan min/max)",
         "exec_timeout": "25000",
         "cycles_done": "1 (1×), 3 (1×)",  # noqa: RUF001
         "bitmap_cvg": "0.09% avg (0.04%-0.13% min/max)",
+        "stability": "86.80% avg (75.12%-98.48% min/max)",
         "last_find": "2024-09-13T06:13:16Z",
         "instances": "0/2",
     }
@@ -80,7 +82,7 @@ def test_afl_stats_02(mocker, tmp_path):
         "corpus_variable   : 13\n"
         "saved_crashes     : 7\n"
         "saved_hangs       : 4\n"
-        "stability         : 0 total (nan-nan min/max)\n"
+        "stability         : 75.12%\n"
         "cycles_done       : 3\n"
         "bitmap_cvg        : 0.13%\n"
         "last_find         : 1696207996\n"
@@ -98,7 +100,7 @@ def test_afl_stats_02(mocker, tmp_path):
         "corpus_variable": "13",
         "saved_crashes": "7",
         "saved_hangs": "4",
-        "stability": "0 total (nan-nan min/max)",
+        "stability": "75.12% avg (75.12%-75.12% min/max)",
         "exec_timeout": "nan",
         "cycles_done": "3 (1×)",  # noqa: RUF001
         "bitmap_cvg": "0.13% avg (0.13%-0.13% min/max)",
