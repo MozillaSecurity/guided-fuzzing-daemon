@@ -445,7 +445,7 @@ class CorpusSyncer:
             perf_counter() - start,
         )
 
-    def upload_queue(self, skip_names: Iterable[str]) -> None:
+    def upload_queue(self, skip_names: Iterable[str]) -> str:
         assert self.project is not None
         start = perf_counter()
 
@@ -488,6 +488,8 @@ class CorpusSyncer:
             errors,
             perf_counter() - start,
         )
+
+        return queue_zip_local.name
 
     def delete_queues(self, skip_names: Iterable[str] | None = None) -> None:
         assert self.project is not None
@@ -692,12 +694,12 @@ class CorpusRefreshContext:
                 queue_syncer = CorpusSyncer(
                     self.storage, Corpus(self.queues_dir), self.project, self.suffix
                 )
-                queue_syncer.upload_queue(
+                queue_path = queue_syncer.upload_queue(
                     skip_names=[
                         f.name for f in updated_tests_dir.iterdir() if f.is_file()
                     ]
                 )
-                queue_syncer.delete_queues()
+                queue_syncer.delete_queues(skip_names=(queue_path,))
             return None
 
         if not update_post_stats(updated_tests_dir):
