@@ -451,7 +451,8 @@ def test_context_keyboard_interrupt(mocker, tmp_path):
 
     # Mock CorpusSyncer methods
     mock_upload_queue = mocker.patch(
-        "guided_fuzzing_daemon.storage.CorpusSyncer.upload_queue"
+        "guided_fuzzing_daemon.storage.CorpusSyncer.upload_queue",
+        return_value="new_queue.zip",
     )
     mock_delete_queues = mocker.patch(
         "guided_fuzzing_daemon.storage.CorpusSyncer.delete_queues"
@@ -480,7 +481,7 @@ def test_context_keyboard_interrupt(mocker, tmp_path):
 
     # Verify queue methods were called
     mock_upload_queue.assert_called_once()
-    mock_delete_queues.assert_called_once()
+    mock_delete_queues.assert_called_once_with(skip_names=("new_queue.zip",))
     mock_upload_corpus.assert_called_once()
 
     # Verify that corpus_post excludes hidden files and directories
@@ -968,7 +969,10 @@ def test_syncer_upload_queue(skip_names, tmp_path):
     (in_path / "e" / "f").touch()
 
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    syncer.upload_queue(skip_names=skip_names)
+    result = syncer.upload_queue(skip_names=skip_names)
+
+    # Test that upload_queue returns the zip filename
+    assert result == f"{corpus.uuid}.zip"
 
     out_path = tmp_path / "out"
 
@@ -1017,14 +1021,22 @@ def test_syncer_delete_queues(tmp_path):
     storage = LocalTestStorageProvider(tmp_path / "cloud")
     (storage.root / "t_proj" / "queues" / "queue1").mkdir(parents=True)
     (storage.root / "t_proj" / "queues" / "queue1" / "a").touch()
-    with ZipFile(storage.root / "t_proj" / "queues" / "queue2.zip", "w"):
+    with ZipFile(storage.root / "t_proj" / "queues" / "old_queue.zip", "w"):
+        pass
+    with ZipFile(storage.root / "t_proj" / "queues" / "replacement_queue.zip", "w"):
         pass
 
     corpus = Corpus(tmp_path)
     syncer = CorpusSyncer(storage, corpus, "t_proj")
-    syncer.delete_queues()
+    syncer.delete_queues(skip_names=["replacement_queue.zip"])
 
-    assert set(storage.iter_local()) == set()
+    # Only the skipped file should remain
+    remaining_files = list(storage.iter_local())
+    assert len(remaining_files) == 1
+    assert (
+        remaining_files[0]
+        == storage.root / "t_proj" / "queues" / "replacement_queue.zip"
+    )
 
 
 def test_syncer_download_queues(tmp_path):
