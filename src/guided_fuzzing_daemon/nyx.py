@@ -12,6 +12,7 @@ from random import choice
 from shutil import copy, move, rmtree, which
 from subprocess import STDOUT, Popen, TimeoutExpired, run
 from time import sleep, time
+from typing import Any
 
 from Collector.Collector import Collector
 from FTB.ProgramConfiguration import ProgramConfiguration
@@ -36,14 +37,18 @@ LOG = getLogger("gfd.nyx")
 AFL_INTERRUPT_WAIT = 15 * 60
 
 
-def force_process_cleanup(process: Popen[str] | None) -> None:
-    if process is not None:
-        try:
-            process.wait(timeout=2)
-        except TimeoutExpired:
-            # SIGKILL is needed to ensure Nyx/Qemu processes are terminated
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            process.wait(timeout=5)
+class ForceClosingPopen(Popen[str]):
+    def __enter__(self) -> ForceClosingPopen:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        if self.poll() is None:
+            try:
+                self.wait(timeout=2)
+            except TimeoutExpired:
+                # SIGKILL is needed to ensure Nyx/Qemu processes are terminated
+                os.killpg(os.getpgid(self.pid), signal.SIGKILL)
+        assert self.wait(timeout=5)
 
 
 def nyx_main(
@@ -112,8 +117,7 @@ def nyx_main(
                 for i, input_dir in enumerate((merger.corpus_dir, merger.queues_dir)):
                     if not any(f.is_file() for f in input_dir.iterdir()):
                         continue
-                    # pylint: disable=consider-using-with
-                    collect_proc = Popen(
+                    with ForceClosingPopen(
                         [
                             *base_args,
                             "-i",
@@ -127,59 +131,59 @@ def nyx_main(
                         text=True,
                         env=env,
                         start_new_session=True,
-                    )
+                    ) as collect_proc:
+                        try:
+                            while collect_proc.poll() is None:
+                                if (
+                                    opts.stats
+                                    and last_stats_report < time() - STATS_UPLOAD_PERIOD
+                                ):
+                                    merger.refresh_stats.write_file(opts.stats, [])
+                                    last_stats_report = time()
+                                sleep(0.1)
 
-                    assert collect_proc is not None
-                    while collect_proc.poll() is None:
-                        if (
-                            opts.stats
-                            and last_stats_report < time() - STATS_UPLOAD_PERIOD
-                        ):
-                            merger.refresh_stats.write_file(opts.stats, [])
-                            last_stats_report = time()
-                        sleep(0.1)
-                    assert not collect_proc.wait()
-
-            except KeyboardInterrupt:
-                if i == 0:
-                    LOG.warning("Interrupt detected during initial corpus processing")
-                    raise
-
-                LOG.warning("Interrupt detected - processing the results we have")
-                force_process_cleanup(collect_proc)
-                raise
+                        except KeyboardInterrupt:
+                            if i == 0:
+                                LOG.warning(
+                                    "Interrupt detected during "
+                                    "initial corpus processing"
+                                )
+                            else:
+                                LOG.warning(
+                                    "Interrupt detected - "
+                                    "processing the results we have"
+                                )
+                            raise
             finally:
                 if i > 0:
                     trace_path = merger.updated_tests_dir / ".traces"
                     if not any(f.is_file() for f in trace_path.iterdir()):
                         LOG.error("No results found in the test directory!")
                     else:
-                        # pylint: disable=consider-using-with
-                        try:
-                            process_proc = Popen(
-                                [
-                                    *base_args,
-                                    "-i",
-                                    str(merger.corpus_dir),
-                                    "-i",
-                                    str(merger.queues_dir),
-                                    "-p",
-                                    "-X",
-                                    str(opts.sharedir),
-                                ],
-                                env=env,
-                                start_new_session=True,
-                                stderr=STDOUT,
-                                stdout=log_tee.open_files[0].handle,
-                                text=True,
-                            )
-                            assert not process_proc.wait()
-                        except KeyboardInterrupt:
-                            LOG.warning(
-                                "Interrupt detected during post-trace processing"
-                            )
-                            force_process_cleanup(process_proc)
-                            raise
+                        with ForceClosingPopen(
+                            [
+                                *base_args,
+                                "-i",
+                                str(merger.corpus_dir),
+                                "-i",
+                                str(merger.queues_dir),
+                                "-p",
+                                "-X",
+                                str(opts.sharedir),
+                            ],
+                            env=env,
+                            start_new_session=True,
+                            stderr=STDOUT,
+                            stdout=log_tee.open_files[0].handle,
+                            text=True,
+                        ) as process_proc:
+                            try:
+                                process_proc.wait()
+                            except KeyboardInterrupt:
+                                LOG.warning(
+                                    "Interrupt detected during post-trace processing"
+                                )
+                                raise
 
         assert merger.exit_code is not None
         return merger.exit_code
