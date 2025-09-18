@@ -402,6 +402,7 @@ class CorpusSyncer:
         start = perf_counter()
 
         uploaded = 0
+        errors = 0
 
         # get list of files to delete if upload is successful
         to_delete = [
@@ -424,6 +425,10 @@ class CorpusSyncer:
                 for testcase in self.corpus.path.iterdir():
                     if testcase.name.startswith("."):
                         continue
+                    if testcase.is_dir():
+                        LOG.error("-> directory detected in corpus: %s", testcase)
+                        errors += 1
+                        continue
                     if self.suffix is not None and testcase.suffix != self.suffix:
                         continue
 
@@ -440,8 +445,9 @@ class CorpusSyncer:
         self.provider.delete(to_delete)
 
         LOG.info(
-            "upload_corpus() -> uploaded=%d (%.03fs)",
+            "upload_corpus() -> uploaded=%d, errors=%d (%.03fs)",
             uploaded,
+            errors,
             perf_counter() - start,
         )
 
