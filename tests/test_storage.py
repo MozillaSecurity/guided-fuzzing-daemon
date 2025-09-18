@@ -450,26 +450,26 @@ def test_context_keyboard_interrupt(mocker, tmp_path):
     )
 
     # Mock CorpusSyncer methods
-    mock_upload_queue = mocker.patch(
-        "guided_fuzzing_daemon.storage.CorpusSyncer.upload_queue",
-        return_value="new_queue.zip",
-    )
+    mock_upload_queue = mocker.spy(CorpusSyncer, "upload_queue")
     mock_delete_queues = mocker.patch(
         "guided_fuzzing_daemon.storage.CorpusSyncer.delete_queues"
     )
-    mock_upload_corpus = mocker.patch(
-        "guided_fuzzing_daemon.storage.CorpusSyncer.upload_corpus"
-    )
+    mock_upload_corpus = mocker.spy(CorpusSyncer, "upload_corpus")
 
     # Test KeyboardInterrupt handling
     with pytest.raises(KeyboardInterrupt):
-        with CorpusRefreshContext(opts, storage) as merger:
+        with CorpusRefreshContext(opts, storage, separate_corpus=True) as merger:
+            (merger.corpus_dir / "a.bin").touch()
+            (merger.corpus_dir / "b.bin").touch()
+            (merger.queues_dir / "c.bin").touch()
+            (merger.queues_dir / "d.bin").touch()
+
             # Create some files in updated_tests_dir so upload methods get called
             merger.updated_tests_dir.mkdir(parents=True, exist_ok=True)
-
-            # Create mock testcases
             (merger.updated_tests_dir / "a.bin").write_text("test")
             (merger.updated_tests_dir / "b.bin").write_text("test")
+            # Only write 1 of 2 entries from queues_dir so that pruning occurs
+            (merger.updated_tests_dir / "c.bin").write_text("test")
 
             # Create hidden files (should be excluded from corpus_post count)
             (merger.updated_tests_dir / ".hidden_file").write_text("hidden")
@@ -479,14 +479,37 @@ def test_context_keyboard_interrupt(mocker, tmp_path):
 
             raise KeyboardInterrupt()
 
+    # Verify corpus was created with the expected files and uploaded
+    mock_upload_corpus.assert_called_once()
+    corpus_zip_path = storage.root / "t_proj" / "corpus" / "corpus.zip"
+    assert corpus_zip_path.exists()
+    with ZipFile(corpus_zip_path) as zf:
+        assert set(zf.namelist()) == {"a.bin", "b.bin", "c.bin"}
+
     # Verify queue methods were called
     mock_upload_queue.assert_called_once()
-    mock_delete_queues.assert_called_once_with(skip_names=("new_queue.zip",))
-    mock_upload_corpus.assert_called_once()
+    assert set(mock_upload_queue.call_args[1]["skip_names"]) == {
+        ".hidden_file",
+        "a.bin",
+        "b.bin",
+        "c.bin",
+    }
+
+    # Verify queue zip was created with expected files (excluding skipped ones)
+    queue_zip_name = mock_upload_queue.spy_return
+    queue_zip_path = storage.root / "t_proj" / "queues" / queue_zip_name
+    assert queue_zip_path.exists()
+    with ZipFile(queue_zip_path) as zf:
+        # Should contain d.bin (the only file not skipped from queues_dir)
+        assert set(zf.namelist()) == {"d.bin"}
+
+    mock_delete_queues.assert_called_once_with(
+        skip_names=(mock_upload_queue.spy_return,)
+    )
 
     # Verify that corpus_post excludes hidden files and directories
     stats = _read_stats(tmp_path / "stats")
-    assert stats["corpus_post"] == "2"
+    assert stats["corpus_post"] == "3"
 
 
 def test_gcsfile_01(gcsfile):
