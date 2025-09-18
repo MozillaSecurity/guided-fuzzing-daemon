@@ -6,6 +6,8 @@ from __future__ import annotations
 import os
 import signal
 from argparse import Namespace
+from collections.abc import Iterator
+from contextlib import contextmanager
 from logging import getLogger
 from pathlib import Path, PurePosixPath
 from random import choice
@@ -37,18 +39,19 @@ LOG = getLogger("gfd.nyx")
 AFL_INTERRUPT_WAIT = 15 * 60
 
 
-class ForceClosingPopen(Popen[str]):
-    def __enter__(self) -> ForceClosingPopen:
-        return self
-
-    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
-        if self.poll() is None:
-            try:
-                self.wait(timeout=2)
-            except TimeoutExpired:
-                # SIGKILL is needed to ensure Nyx/Qemu processes are terminated
-                os.killpg(os.getpgid(self.pid), signal.SIGKILL)
-        assert self.wait(timeout=5)
+@contextmanager
+def ForceClosingPopen(*args: Any, **kwds: Any) -> Iterator[Popen[str]]:  # pylint: disable=invalid-name
+    # pylint: disable=consider-using-with
+    proc = Popen(*args, **kwds)
+    try:
+        yield proc
+    finally:
+        try:
+            proc.wait(timeout=2)
+        except TimeoutExpired:
+            # SIGKILL is needed to ensure Nyx/Qemu processes are terminated
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        assert proc.wait(timeout=5) == 0
 
 
 def nyx_main(
