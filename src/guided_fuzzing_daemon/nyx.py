@@ -36,6 +36,16 @@ LOG = getLogger("gfd.nyx")
 AFL_INTERRUPT_WAIT = 15 * 60
 
 
+def force_process_cleanup(process: Popen[str] | None) -> None:
+    if process is not None:
+        try:
+            process.wait(timeout=2)
+        except TimeoutExpired:
+            # SIGKILL is needed to ensure Nyx/Qemu processes are terminated
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            process.wait(timeout=5)
+
+
 def nyx_main(
     opts: Namespace,
     collector: Collector | None,
@@ -97,11 +107,9 @@ def nyx_main(
             LOG.info("Running afl-cmin")
             last_stats_report = 0.0
             collect_proc = None
-
             i = 0
-            input_dirs = [merger.corpus_dir, merger.queues_dir]
             try:
-                for i, input_dir in enumerate(input_dirs):
+                for i, input_dir in enumerate((merger.corpus_dir, merger.queues_dir)):
                     if not any(f.is_file() for f in input_dir.iterdir()):
                         continue
                     # pylint: disable=consider-using-with
@@ -138,13 +146,7 @@ def nyx_main(
                     raise
 
                 LOG.warning("Interrupt detected - processing the results we have")
-                if collect_proc is not None:
-                    try:
-                        collect_proc.wait(timeout=2)
-                    except TimeoutExpired:
-                        # SIGKILL is needed to ensure Nyx/Qemu processes are terminated
-                        os.killpg(os.getpgid(collect_proc.pid), signal.SIGKILL)
-                        collect_proc.wait(timeout=5)
+                force_process_cleanup(collect_proc)
                 raise
             finally:
                 if i > 0:
@@ -153,23 +155,31 @@ def nyx_main(
                         LOG.error("No results found in the test directory!")
                     else:
                         # pylint: disable=consider-using-with
-                        process_proc = Popen(
-                            [
-                                *base_args,
-                                "-i",
-                                str(merger.corpus_dir),
-                                "-i",
-                                str(merger.queues_dir),
-                                "-p",
-                                "-X",
-                                str(opts.sharedir),
-                            ],
-                            stderr=STDOUT,
-                            stdout=log_tee.open_files[0].handle,
-                            text=True,
-                            env=env,
-                        )
-                        assert not process_proc.wait()
+                        try:
+                            process_proc = Popen(
+                                [
+                                    *base_args,
+                                    "-i",
+                                    str(merger.corpus_dir),
+                                    "-i",
+                                    str(merger.queues_dir),
+                                    "-p",
+                                    "-X",
+                                    str(opts.sharedir),
+                                ],
+                                env=env,
+                                start_new_session=True,
+                                stderr=STDOUT,
+                                stdout=log_tee.open_files[0].handle,
+                                text=True,
+                            )
+                            assert not process_proc.wait()
+                        except KeyboardInterrupt:
+                            LOG.warning(
+                                "Interrupt detected during post-trace processing"
+                            )
+                            force_process_cleanup(process_proc)
+                            raise
 
         assert merger.exit_code is not None
         return merger.exit_code
