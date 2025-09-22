@@ -158,6 +158,7 @@ def afl_main(
             LogTee(opts.afl_hide_logs, opts.instances) as log_tee,
         ):
             log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, 0))
+            base_env["AFL_KEEP_TRACES"] = "1"
             base_args = [
                 str(afl_cmin),
                 "-e",

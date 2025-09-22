@@ -97,6 +97,7 @@ def nyx_main(
             log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, 0))
 
             env = os.environ.copy()
+            env["AFL_KEEP_TRACES"] = "1"
             if opts.nyx_log_pattern:
                 if "%" in opts.nyx_log_pattern:
                     env["AFL_NYX_LOG"] = opts.nyx_log_pattern % (0,)

@@ -465,17 +465,14 @@ def test_context_keyboard_interrupt(mocker, tmp_path):
             (merger.queues_dir / "d.bin").touch()
 
             # Create some files in updated_tests_dir so upload methods get called
-            merger.updated_tests_dir.mkdir(parents=True, exist_ok=True)
-            (merger.updated_tests_dir / "a.bin").write_text("test")
-            (merger.updated_tests_dir / "b.bin").write_text("test")
-            # Only write 1 of 2 entries from queues_dir so that pruning occurs
-            (merger.updated_tests_dir / "c.bin").write_text("test")
+            (merger.updated_tests_dir / ".traces").mkdir(parents=True, exist_ok=True)
+            # Only write 1 of 2 of the queue files to ensure pruning occurs
+            for filename in ["a.bin", "b.bin", "c.bin"]:
+                (merger.updated_tests_dir / filename).touch()
+                (merger.updated_tests_dir / ".traces" / filename).touch()
 
             # Create hidden files (should be excluded from corpus_post count)
             (merger.updated_tests_dir / ".hidden_file").write_text("hidden")
-
-            # Create directories (should be excluded from corpus_post count)
-            (merger.updated_tests_dir / "traces").mkdir()
 
             raise KeyboardInterrupt()
 
@@ -489,7 +486,6 @@ def test_context_keyboard_interrupt(mocker, tmp_path):
     # Verify queue methods were called
     mock_upload_queue.assert_called_once()
     assert set(mock_upload_queue.call_args[1]["skip_names"]) == {
-        ".hidden_file",
         "a.bin",
         "b.bin",
         "c.bin",
