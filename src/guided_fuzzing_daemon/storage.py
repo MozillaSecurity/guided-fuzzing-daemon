@@ -700,11 +700,12 @@ class CorpusRefreshContext:
                 queue_syncer = CorpusSyncer(
                     self.storage, Corpus(self.queues_dir), self.project, self.suffix
                 )
-                queue_path = queue_syncer.upload_queue(
-                    skip_names=[
-                        f.name for f in updated_tests_dir.iterdir() if f.is_file()
-                    ]
-                )
+                traces_dir = self.updated_tests_dir / ".traces"
+                if traces_dir.exists() and traces_dir.is_dir():
+                    trace_names = [f.name for f in traces_dir.iterdir() if f.is_file()]
+                else:
+                    trace_names = []
+                queue_path = queue_syncer.upload_queue(skip_names=trace_names)
                 queue_syncer.delete_queues(skip_names=(queue_path,))
             return None
 
