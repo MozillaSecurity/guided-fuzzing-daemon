@@ -47,11 +47,13 @@ def ForceClosingPopen(*args: Any, **kwds: Any) -> Iterator[Popen[str]]:  # pylin
         yield proc
     finally:
         try:
-            proc.wait(timeout=2)
+            ret = proc.wait(timeout=5)
+            assert ret == 0, f"Process returned exit code {ret}"
         except TimeoutExpired:
             # SIGKILL is needed to ensure Nyx/Qemu processes are terminated
+            LOG.warning("Killing process group with KILL")
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        assert proc.wait(timeout=5) == 0
+            proc.wait(timeout=5)
 
 
 def nyx_main(
