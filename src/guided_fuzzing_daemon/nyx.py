@@ -29,7 +29,14 @@ from .storage import (
     CorpusRefreshContext,
     CorpusSyncer,
 )
-from .utils import LogTee, TempPath, create_envs, open_log_handle, warn_local
+from .utils import (
+    LogTee,
+    TempPath,
+    create_envs,
+    open_log_handle,
+    rename_files_to_hash,
+    warn_local,
+)
 
 ASAN_SYMBOLIZE = which("asan_symbolize")
 LOG = getLogger("gfd.nyx")
@@ -93,6 +100,10 @@ def nyx_main(
                 raise RuntimeError(
                     "Cannot refresh corpus without config.sh file. Aborting..."
                 )
+
+            # Hash and rename all entries in the corpus and queue to avoid duplicates
+            for src_dir in (merger.queues_dir, merger.corpus_dir):
+                rename_files_to_hash(src_dir)
 
             log_tee.append(open_log_handle(opts.afl_log_pattern, tmp_base, 0))
 

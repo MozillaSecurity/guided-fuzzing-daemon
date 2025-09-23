@@ -634,11 +634,11 @@ def test_nyx_refresh_02(mocker, nyx, tmp_path):
         if target == ResourceType.QUEUE:
             (queues_path / "config.sh").touch()
             (queues_path / "test2").write_text("test")
+            (queues_path / "test3").write_text("test")
         return mocker.DEFAULT
 
     syncer.return_value.download_resource.side_effect = download_resource
 
-    syncer.return_value.download_resource.side_effect = download_resource
     nyx.args.stats = tmp_path / "stats"
     nyx.popen.side_effect = fake_run
     nyx.popen.return_value.poll.side_effect = chain(
@@ -659,6 +659,9 @@ def test_nyx_refresh_02(mocker, nyx, tmp_path):
         mocker.call.delete_queues(),
     ]
     assert stats.return_value.write_file.call_count == 3
+
+    # check that duplicate queue entries were discarded
+    assert len(set(queues_path.iterdir())) == 1
 
 
 def test_nyx_refresh_keyboard_interrupt_corpus_collection(nyx, mocker, tmp_path):
