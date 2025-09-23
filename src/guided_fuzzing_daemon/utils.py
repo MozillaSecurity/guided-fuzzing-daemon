@@ -3,6 +3,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 import time
@@ -12,6 +13,7 @@ from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from copy import copy
+from logging import getLogger
 from math import log10
 from pathlib import Path
 from random import uniform
@@ -26,6 +28,8 @@ if sys.version_info[:2] < (3, 12):
     from itertools import islice
 
 THREAD_WORKERS = 16
+
+LOG = getLogger("gfd.utils")
 
 
 def apply_transform(script_path: Path, testcase_path: Path) -> Path:
@@ -315,3 +319,41 @@ def open_log_handle(pattern: str | None, tmp_base: Path, idx: int) -> TextIO:
             return open(pattern % idx, "w", encoding="utf-8", buffering=1)
         return open(pattern, "w", encoding="utf-8", buffering=1)
     return (tmp_base / f"screen{idx}.log").open("w", encoding="utf-8", buffering=1)
+
+
+def rename_files_to_hash(
+    src_dir: Path,
+    skip_names: Iterable[str] | None = None,
+) -> None:
+    """Rename all files in a directory to their hash values.
+
+    Args:
+        src_dir: Path to directory containing files to rename
+        skip_names: Iterable of filenames to exclude from renaming
+    """
+    exclude_set = set(skip_names) if skip_names else set()
+
+    total = 0
+    dupes = 0
+    for file_path in src_dir.iterdir():
+        total += 1
+        if not file_path.is_file() or file_path.name in exclude_set:
+            continue
+
+        hasher = hashlib.blake2b()
+
+        with file_path.open("rb") as f:
+            while chunk := f.read(1048576):
+                hasher.update(chunk)
+
+        hash_value = hasher.hexdigest()
+        new_path = file_path.parent / hash_value
+
+        if new_path.exists():
+            # Hash collision - delete the duplicate file
+            file_path.unlink()
+            dupes += 1
+        else:
+            file_path.rename(new_path)
+
+    LOG.info("Deduped %d/%d files in %s", dupes, total, src_dir)

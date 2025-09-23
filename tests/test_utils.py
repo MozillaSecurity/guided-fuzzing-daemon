@@ -20,6 +20,7 @@ from guided_fuzzing_daemon.utils import (
     LogTee,
     create_envs,
     open_log_handle,
+    rename_files_to_hash,
 )
 
 
@@ -274,3 +275,23 @@ def test_open_log_handle(tmp_path: Path, pattern: str | None, idx: int, expected
     f = open_log_handle(full_pattern, tmp_path, idx)
     assert Path(f.name).name == expected
     f.close()
+
+
+def test_rename_files_to_hash_with_exclusions(tmp_path):
+    """Test file renaming to hash values with and without exclusions"""
+    (tmp_path / "config.sh").touch()
+    (tmp_path / "a").write_text("a")
+    (tmp_path / "b").write_text("b")
+    (tmp_path / "c").write_text("b")
+    (tmp_path / "d").mkdir()
+
+    rename_files_to_hash(tmp_path, skip_names=["config.sh"])
+
+    assert (tmp_path / "config.sh").exists()
+    renamed_files = [
+        f for f in tmp_path.iterdir() if f.is_file() and f.name != "config.sh"
+    ]
+    assert len(renamed_files) == 2
+    for f in renamed_files:
+        data = f.read_text()
+        assert data in ("a", "b")
