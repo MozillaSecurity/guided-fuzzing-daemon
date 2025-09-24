@@ -4,6 +4,7 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 from collections import OrderedDict
@@ -295,3 +296,34 @@ def test_rename_files_to_hash_with_exclusions(tmp_path):
     for f in renamed_files:
         data = f.read_text()
         assert data in ("a", "b")
+
+
+def test_rename_files_to_hash_file_already_named_correctly(tmp_path, mocker):
+    """Test that files already named with their hash are not renamed"""
+    content = "test content"
+    expected_hash = hashlib.blake2b(content.encode()).hexdigest()
+
+    # Create a file that has been previously hashed
+    previously_hashed = tmp_path / expected_hash
+    previously_hashed.write_text(content)
+
+    # Spy on the rename method to ensure the correctly named file is not renamed
+    spy_rename = mocker.spy(Path, "rename")
+
+    rename_files_to_hash(tmp_path)
+
+    # The correctly named file should still exist and not have been renamed
+    assert previously_hashed.exists()
+    assert previously_hashed.read_text() == content
+
+    # Only one file should remain
+    remaining_files = [f for f in tmp_path.iterdir() if f.is_file()]
+    assert len(remaining_files) == 1
+    assert remaining_files[0].name == expected_hash
+
+    # The correctly named file should not have been renamed
+    # (spy_rename should not have been called on the correctly named file)
+    rename_calls = [
+        call for call in spy_rename.call_args_list if call[0][0].name == expected_hash
+    ]
+    assert len(rename_calls) == 0
