@@ -335,6 +335,7 @@ def rename_files_to_hash(
 
     total = 0
     dupes = 0
+    seen = set()
     for file_path in src_dir.iterdir():
         total += 1
         if not file_path.is_file() or file_path.name in exclude_set:
@@ -347,13 +348,13 @@ def rename_files_to_hash(
                 hasher.update(chunk)
 
         hash_value = hasher.hexdigest()
-        new_path = file_path.parent / hash_value
-
-        if new_path.exists():
-            # Hash collision - delete the duplicate file
+        if hash_value not in seen:
+            seen.add(hash_value)
+            new_path = file_path.parent / hash_value
+            if not new_path.exists():
+                file_path.rename(file_path.parent / hash_value)
+        else:
             file_path.unlink()
             dupes += 1
-        else:
-            file_path.rename(new_path)
 
     LOG.info("Deduped %d/%d files in %s", dupes, total, src_dir)
