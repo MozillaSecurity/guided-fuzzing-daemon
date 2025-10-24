@@ -16,10 +16,13 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from __future__ import annotations
 
+import os
 from logging import DEBUG, ERROR, INFO, WARNING, basicConfig, getLogger
 from pathlib import Path
+from shutil import disk_usage
 
 from Collector.Collector import Collector
+from psutil import virtual_memory
 
 from .afl import afl_main
 from .args import parse_args
@@ -35,11 +38,48 @@ from .storage import (
     S3Storage,
 )
 
+try:
+    from sentry_sdk import Event, Hint
+    from sentry_sdk import init as sentry_init
+
+    HAVE_SENTRY = True
+except ImportError:
+    HAVE_SENTRY = False
+
+
 LOG = getLogger("gfd")
+
+
+def _add_system_context(event: Event, hint: Hint) -> Event:
+    event.setdefault("contexts", {})
+    event["contexts"]["system_stats"] = {
+        "free_memory_mb": virtual_memory().available // 1024 // 1024,
+        "free_disk_mb": disk_usage("/").free // 1024 // 1024,
+    }
+
+    # add crashing module as a tag
+    exc_info = hint.get("exc_info")
+    if exc_info:
+        _, _, tb = exc_info
+        if tb:
+            mod_name = tb.tb_frame.f_globals.get("__name__")
+            if mod_name:
+                event.setdefault("tags", {})["origin_module"] = mod_name
+
+    return event
 
 
 def main(argv: list[str] | None = None) -> int:
     """Command line options."""
+    if (
+        HAVE_SENTRY
+        and "SENTRY_DSN" in os.environ
+        and "PYTEST_CURRENT_TEST" not in os.environ
+    ):
+        sentry_init(
+            dsn=os.environ["SENTRY_DSN"],
+            before_send=_add_system_context,
+        )
 
     opts = parse_args(argv)
 
