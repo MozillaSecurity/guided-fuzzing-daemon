@@ -33,6 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pre-commit", "tox"]
+sentry = ["sentry_sdk"]
 
 [project.scripts]
 guided-fuzzing-daemon = "guided_fuzzing_daemon.main:main"
