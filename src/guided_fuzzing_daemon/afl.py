@@ -22,7 +22,6 @@ from .stats import (
     STATS_UPLOAD_PERIOD,
     GeneratedField,
     MaxTimeField,
-    MeanField,
     MeanMinMaxField,
     StatAggregator,
     SumField,
@@ -48,12 +47,9 @@ class AFLStats(StatAggregator):
         self.add_field("execs_done", SumMinMaxField())
         self.add_field("execs_per_sec", SumMinMaxField())
         self.add_field("stability", MeanMinMaxField(suffix="%"))
-        self.add_field("pending_favs", SumField())
-        self.add_field("pending_total", SumField())
         self.add_field("corpus_variable", SumField())
         self.add_field("saved_crashes", SumField())
         self.add_field("saved_hangs", SumField())
-        self.add_field("exec_timeout", MeanField())
         self.add_field("cycles_done", ValueCounterField())
         self.add_field("bitmap_cvg", MeanMinMaxField(suffix="%"))
         self.add_field("last_find", MaxTimeField())
