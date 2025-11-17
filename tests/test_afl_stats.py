@@ -16,12 +16,10 @@ def test_afl_stats_01(mocker, tmp_path):
     (tmp_path / "0" / "fuzzer_stats").write_text(
         "execs_done        : 77617\n"
         "execs_per_sec     : 22.64\n"
-        "pending_favs      : 12\n"
-        "pending_total     : 21\n"
+        "edges_found       : 2210\n"
         "corpus_variable   : 13\n"
         "saved_crashes     : 7\n"
         "saved_hangs       : 4\n"
-        "exec_timeout      : 20000\n"
         "cycles_done       : 3\n"
         "bitmap_cvg        : 0.13%\n"
         "stability         : 98.48%\n"
@@ -31,12 +29,10 @@ def test_afl_stats_01(mocker, tmp_path):
     (tmp_path / "1" / "fuzzer_stats").write_text(
         "execs_done        : 77617\n"
         "execs_per_sec     : 22.64\n"
-        "pending_favs      : 24\n"
-        "pending_total     : 21\n"
+        "edges_found       : 1938\n"
         "corpus_variable   : 13\n"
         "saved_crashes     : 1\n"
         "saved_hangs       : 9\n"
-        "exec_timeout      : 30000\n"
         "cycles_done       : 1\n"
         "bitmap_cvg        : 0.04%\n"
         "stability         : 75.12%\n"
@@ -51,12 +47,10 @@ def test_afl_stats_01(mocker, tmp_path):
     assert stat_lines == {
         "execs_done": "155234 total (77617-77617 min/max)",
         "execs_per_sec": "45.28 total (22.64-22.64 min/max)",
-        "pending_favs": "36",
-        "pending_total": "42",
+        "edges_found": "2074 avg (1938-2210 min/max)",
         "corpus_variable": "26",
         "saved_crashes": "8",
         "saved_hangs": "13",
-        "exec_timeout": "25000",
         "cycles_done": "1 (1×), 3 (1×)",  # noqa: RUF001
         "bitmap_cvg": "0.09% avg (0.04%-0.13% min/max)",
         "stability": "86.80% avg (75.12%-98.48% min/max)",
@@ -77,8 +71,6 @@ def test_afl_stats_02(mocker, tmp_path):
         "execs_done        : 7.76.17\n"
         "execs_per_sec     : 22.64\n"
         "bad data doesn't break parsing\n"
-        "pending_favs      : 12\n"
-        "pending_total     : 21\n"
         "corpus_variable   : 13\n"
         "saved_crashes     : 7\n"
         "saved_hangs       : 4\n"
@@ -86,6 +78,7 @@ def test_afl_stats_02(mocker, tmp_path):
         "cycles_done       : 3\n"
         "bitmap_cvg        : 0.13%\n"
         "last_find         : 1696207996\n"
+        "edges_found       : 2074\n"
     )
     stats.update_and_write(tmp_path / "stats", [tmp_path / "0"])
     stat_lines = dict(
@@ -95,15 +88,13 @@ def test_afl_stats_02(mocker, tmp_path):
     assert stat_lines == {
         "execs_done": "0 total (nan-nan min/max)",
         "execs_per_sec": "22.64 total (22.64-22.64 min/max)",
-        "pending_favs": "12",
-        "pending_total": "21",
         "corpus_variable": "13",
         "saved_crashes": "7",
         "saved_hangs": "4",
         "stability": "75.12% avg (75.12%-75.12% min/max)",
-        "exec_timeout": "nan",
         "cycles_done": "3 (1×)",  # noqa: RUF001
         "bitmap_cvg": "0.13% avg (0.13%-0.13% min/max)",
         "last_find": "2023-10-02T00:53:16Z",
         "instances": "0/1",
+        "edges_found": "2074 avg (2074-2074 min/max)",
     }
