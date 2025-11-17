@@ -47,6 +47,7 @@ class AFLStats(StatAggregator):
         self.add_field("execs_done", SumMinMaxField())
         self.add_field("execs_per_sec", SumMinMaxField())
         self.add_field("stability", MeanMinMaxField(suffix="%"))
+        self.add_field("edges_found", MeanMinMaxField())
         self.add_field("corpus_variable", SumField())
         self.add_field("saved_crashes", SumField())
         self.add_field("saved_hangs", SumField())
