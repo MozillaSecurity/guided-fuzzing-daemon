@@ -464,13 +464,16 @@ def afl_main(
                             forceCrashInstruction=False,
                             numFrames=8,
                         )
+                        metadata = {
+                            "afl-instance": crash_path.parent.parent.name,
+                            "afl-crash": crash_path.name,
+                        }
+                        if "FUZZER" in env:
+                            metadata["FUZZER"] = env["FUZZER"]
                         result = collector.submit(
                             crash_info,
                             str(crash_path),
-                            metaData={
-                                "afl-instance": crash_path.parent.parent.name,
-                                "afl-crash": crash_path.name,
-                            },
+                            metaData=metadata,
                         )
                         LOG.info(
                             'Successfully submitted crash: "%s" as %s',
