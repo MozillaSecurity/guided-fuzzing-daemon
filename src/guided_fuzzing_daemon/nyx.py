@@ -81,8 +81,10 @@ def nyx_main(
         # Run afl-cmin
         afl_cmin = Path(opts.aflbindir) / "afl-cmin"
         if not afl_cmin.exists():
-            LOG.error("error: Unable to locate afl-cmin binary.")
-            return 2
+            afl_cmin = Path(opts.aflbindir) / "afl-cmin.awk"
+            if not afl_cmin.exists():
+                LOG.error("error: Unable to locate afl-cmin executable.")
+                return 2
 
         with (
             CorpusRefreshContext(

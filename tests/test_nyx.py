@@ -672,7 +672,7 @@ def test_nyx_refresh_keyboard_interrupt_corpus_collection(nyx, mocker, tmp_path)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
     syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
     nyx.args.corpus_refresh = refresh_path
-    (nyx.aflbindir / "afl-cmin").touch()
+    (nyx.aflbindir / "afl-cmin.awk").touch()
 
     def fake_run(*_args, **_kwargs):
         # Raise KeyboardInterrupt on first iteration

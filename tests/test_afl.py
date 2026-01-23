@@ -732,7 +732,7 @@ def test_afl_refresh_keyboard_interrupt_corpus_collection(afl, mocker, tmp_path)
     syncer = mocker.patch("guided_fuzzing_daemon.storage.CorpusSyncer", autospec=True)
     syncer.return_value.corpus = SimpleNamespace(path=refresh_path)
     afl.args.corpus_refresh = refresh_path
-    (afl.aflbindir / "afl-cmin").touch()
+    (afl.aflbindir / "afl-cmin.awk").touch()
 
     corpus_path = refresh_path / "corpus"
     queues_path = refresh_path / "queues"
