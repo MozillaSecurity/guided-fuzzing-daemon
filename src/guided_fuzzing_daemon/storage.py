@@ -354,6 +354,8 @@ class GoogleCloudStorage(CloudStorageProvider):
 
     def iter(self, prefix: PurePosixPath) -> Iterator[CloudStorageFile]:
         for blob in self.bucket.list_blobs(prefix=f"{prefix}/"):
+            if blob.name.endswith("/"):
+                continue
             yield GCSFile(PurePosixPath(blob.name), blob.updated, blob.size, self)
 
     def iter_projects(self, prefix: str = "") -> Iterable[str]:

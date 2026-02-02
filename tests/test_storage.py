@@ -599,9 +599,11 @@ def test_googlecloudstorage_01(gcs, mocker):
 
 def test_googlecloudstorage_02(gcs, mocker):
     """test GoogleCloudStorage.iter()"""
-    mock_blob = mocker.MagicMock(updated=datetime(2023, 8, 23))
-    mock_blob.name = "test_file.txt"
-    gcs.bucket.list_blobs.return_value = [mock_blob]
+    mock_blob1 = mocker.MagicMock(updated=datetime(2023, 8, 23))
+    mock_blob1.name = "test_file.txt"
+    mock_blob2 = mocker.MagicMock(updated=datetime(2023, 8, 23))
+    mock_blob2.name = "/"
+    gcs.bucket.list_blobs.return_value = [mock_blob1, mock_blob2]
 
     files = list(gcs.iter(PurePosixPath("prefix")))
 
