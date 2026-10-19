@@ -320,7 +320,8 @@ def afl_main(
         copy(seed, corpus_seed)
 
         while opts.max_runtime > time() - start:
-            # check and restart subprocesses
+            # Record exited subprocesses, but defer restarting them until after
+            # processing crashes. AFL++ can clear its crash directory on startup.
             for idx, collect_proc in enumerate(procs):
                 if collect_proc and collect_proc.poll() is not None:
                     LOG.warning("afl-fuzz returned early: %d", collect_proc.wait())
@@ -330,6 +331,86 @@ def afl_main(
                         # we ran once with AFL_DEBUG=1, time to stop
                         return 1
 
+            # tee logs
+            log_tee.print()
+
+            # submit any crashes
+            if collector:
+                # AFL++ writes crashes in the output directory like:
+                #     {output-dir}/{instance-id}/crashes/{testcase}
+                for crash_path in opts.corpus_out.glob("*/crashes/*"):
+                    if (
+                        crash_path.suffix == ".processed"
+                        or (
+                            crash_path.parent / f"{crash_path.name}.processed"
+                        ).is_file()
+                        or crash_path.suffix == ".norepro"
+                        or (crash_path.parent / f"{crash_path.name}.norepro").is_file()
+                    ):
+                        continue
+
+                    # repro to collect logs
+                    crashing_instance = int(crash_path.parent.parent.name)
+                    env = envs[crashing_instance].copy()
+                    env["MOZ_FUZZ_TESTFILE"] = str(crash_path.resolve())
+                    # many targets require `AFL_PRELOAD` to get coverage from dlopen-ed
+                    # libraries, but we don't care about coverage for repro, so just
+                    # ignore problems (using `LD_PRELOAD` silences the warnings, but
+                    # breaks `llvm-symbolizer`)
+                    env["AFL_IGNORE_PROBLEMS"] = "1"
+                    if "ASAN_OPTIONS" in env:
+                        env["ASAN_OPTIONS"] = env["ASAN_OPTIONS"].replace(
+                            "symbolize=0", "symbolize=1"
+                        )
+                    runner = AutoRunner.fromBinaryArgs(binary, env=env)
+                    if runner.run():
+                        crash_info = runner.getCrashInfo(cfgs[crashing_instance])
+                    else:
+                        LOG.warning(
+                            "Warning: Failed to reproduce the given crash, "
+                            "not submitting."
+                        )
+                        crash_path.rename(
+                            crash_path.parent / f"{crash_path.name}.norepro"
+                        )
+                        continue
+
+                    (sigfile, metadata) = collector.search(crash_info)
+
+                    if sigfile is not None:
+                        LOG.warning(
+                            "Crash matches signature %s, not submitting...", sigfile
+                        )
+                    else:
+                        collector.generate(
+                            crash_info,
+                            forceCrashAddress=True,
+                            forceCrashInstruction=False,
+                            numFrames=8,
+                        )
+                        metadata = {
+                            "afl-instance": crash_path.parent.parent.name,
+                            "afl-crash": crash_path.name,
+                        }
+                        if "FUZZER" in env:
+                            metadata["FUZZER"] = env["FUZZER"]
+                        result = collector.submit(
+                            crash_info,
+                            str(crash_path),
+                            metaData=metadata,
+                        )
+                        LOG.info(
+                            'Successfully submitted crash: "%s" as %s',
+                            result["shortSignature"],
+                            result["id"],
+                        )
+                    crash_path.rename(
+                        crash_path.parent / f"{crash_path.name}.processed"
+                    )
+
+            # Restart stopped subprocesses only after handling their pending
+            # crashes. AFL++ may move or remove existing crash files on startup.
+            for idx, collect_proc in enumerate(procs):
                 if (
                     collect_proc is None
                     # rate limit AFL++ instance launch to 1/minute
@@ -408,83 +489,6 @@ def afl_main(
                     )
                     last_afl_start = time()
                     stats.fields["instances"] += 1  # type: ignore
-
-            # tee logs
-            log_tee.print()
-
-            # submit any crashes
-            if collector:
-                # AFL++ writes crashes in the output directory like:
-                #     {output-dir}/{instance-id}/crashes/{testcase}
-                for crash_path in opts.corpus_out.glob("*/crashes/*"):
-                    if (
-                        crash_path.suffix == ".processed"
-                        or (
-                            crash_path.parent / f"{crash_path.name}.processed"
-                        ).is_file()
-                        or crash_path.suffix == ".norepro"
-                        or (crash_path.parent / f"{crash_path.name}.norepro").is_file()
-                    ):
-                        continue
-
-                    # repro to collect logs
-                    crashing_instance = int(crash_path.parent.parent.name)
-                    env = envs[crashing_instance].copy()
-                    env["MOZ_FUZZ_TESTFILE"] = str(crash_path.resolve())
-                    # many targets require `AFL_PRELOAD` to get coverage from dlopen-ed
-                    # libraries, but we don't care about coverage for repro, so just
-                    # ignore problems (using `LD_PRELOAD` silences the warnings, but
-                    # breaks `llvm-symbolizer`)
-                    env["AFL_IGNORE_PROBLEMS"] = "1"
-                    if "ASAN_OPTIONS" in env:
-                        env["ASAN_OPTIONS"] = env["ASAN_OPTIONS"].replace(
-                            "symbolize=0", "symbolize=1"
-                        )
-                    runner = AutoRunner.fromBinaryArgs(binary, env=env)
-                    if runner.run():
-                        crash_info = runner.getCrashInfo(cfgs[crashing_instance])
-                    else:
-                        LOG.warning(
-                            "Warning: Failed to reproduce the given crash, "
-                            "not submitting."
-                        )
-                        crash_path.rename(
-                            crash_path.parent / f"{crash_path.name}.norepro"
-                        )
-                        continue
-
-                    (sigfile, metadata) = collector.search(crash_info)
-
-                    if sigfile is not None:
-                        LOG.warning(
-                            "Crash matches signature %s, not submitting...", sigfile
-                        )
-                    else:
-                        collector.generate(
-                            crash_info,
-                            forceCrashAddress=True,
-                            forceCrashInstruction=False,
-                            numFrames=8,
-                        )
-                        metadata = {
-                            "afl-instance": crash_path.parent.parent.name,
-                            "afl-crash": crash_path.name,
-                        }
-                        if "FUZZER" in env:
-                            metadata["FUZZER"] = env["FUZZER"]
-                        result = collector.submit(
-                            crash_info,
-                            str(crash_path),
-                            metaData=metadata,
-                        )
-                        LOG.info(
-                            'Successfully submitted crash: "%s" as %s',
-                            result["shortSignature"],
-                            result["id"],
-                        )
-                    crash_path.rename(
-                        crash_path.parent / f"{crash_path.name}.processed"
-                    )
 
             # Only upload new corpus files every 2 hours or after corpus reduction
             if opts.queue_upload and last_queue_upload < time() - QUEUE_UPLOAD_PERIOD:
